@@ -24,8 +24,8 @@ IOU_THRESHOLD = 0.65  # 重複検出を除去するためのIOU閾値
 MAX_DETECTIONS = 10  # 1フレームあたりの最大検出数
 
 # フレーム幅と高さを固定値として定義
-FRAME_WIDTH = 640
-FRAME_HEIGHT = 480
+FRAME_WIDTH = 1280
+FRAME_HEIGHT = 960
 
 
 # 人流カウント設定
