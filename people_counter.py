@@ -80,8 +80,10 @@ class Person:
 
 class PeopleCounter:
     def __init__(self, start_time):
-        self.right_to_left = 0  # 右から左へ移動
-        self.left_to_right = 0  # 左から右へ移動
+        self.right_to_left = 0  # 右から左へ移動（期間カウント）
+        self.left_to_right = 0  # 左から右へ移動（期間カウント）
+        self.total_right_to_left = 0  # 累積カウント
+        self.total_left_to_right = 0  # 累積カウント
         self.start_time = start_time
         self.last_save_time = start_time
     
@@ -89,8 +91,10 @@ class PeopleCounter:
         """方向に基づいてカウンターを更新"""
         if direction == "right_to_left":
             self.right_to_left += 1
+            self.total_right_to_left += 1
         elif direction == "left_to_right":
             self.left_to_right += 1
+            self.total_left_to_right += 1
     
     def get_counts(self):
         """現在のカウント状況を取得"""
@@ -98,6 +102,14 @@ class PeopleCounter:
             "right_to_left": self.right_to_left,
             "left_to_right": self.left_to_right,
             "total": self.right_to_left + self.left_to_right
+        }
+    
+    def get_total_counts(self):
+        """累積カウント状況を取得"""
+        return {
+            "right_to_left": self.total_right_to_left,
+            "left_to_right": self.total_left_to_right,
+            "total": self.total_right_to_left + self.total_left_to_right
         }
     
     def save_to_json(self, filename_prefix=OUTPUT_PREFIX):
@@ -109,16 +121,21 @@ class PeopleCounter:
             data = {
                 "timestamp": timestamp,
                 "duration_seconds": int(current_time - self.last_save_time),
-                "counts": self.get_counts()
+                "period_counts": self.get_counts(),
+                "total_counts": self.get_total_counts()
             }
             
-            filename = f"{filename_prefix}_{timestamp}.json"
+            # 出力ディレクトリを確認
+            os.makedirs(OUTPUT_DIR, exist_ok=True)
+            
+            # ファイルパスを正しく構築
+            filename = os.path.join(OUTPUT_DIR, f"{filename_prefix}_{timestamp}.json")
             with open(filename, 'w') as f:
                 json.dump(data, f, indent=4)
             
             print(f"Data saved to {filename}")
             
-            # カウンターをリセットして新しい計測期間を開始
+            # 期間カウンターのみリセット
             self.right_to_left = 0
             self.left_to_right = 0
             self.last_save_time = current_time
@@ -325,24 +342,24 @@ def process_frame_callback(request):
                         cv2.line(m.array, person.trajectory[i-1], person.trajectory[i], color, 2)
             
             # カウント情報を表示
-            counts = counter.get_counts()
-            cv2.putText(m.array, f"右→左: {counts['right_to_left']}", 
-                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            cv2.putText(m.array, f"左→右: {counts['left_to_right']}", 
-                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(m.array, f"合計: {counts['total']}", 
-                       (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+            total_counts = counter.get_total_counts()
+            cv2.putText(m.array, f"right_to_left: {total_counts['right_to_left']}", 
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.putText(m.array, f"left_to_right: {total_counts['left_to_right']}", 
+                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(m.array, f"total: {total_counts['total']}", 
+                    (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
             
             # 経過時間表示
             elapsed = int(time.time() - counter.last_save_time)
             remaining = COUNTING_INTERVAL - elapsed
-            cv2.putText(m.array, f"残り時間: {remaining}秒", 
+            cv2.putText(m.array, f"Remaining time: {remaining}sec", 
                        (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
             
         # 指定間隔ごとにJSONファイルに保存
-        output_path = os.path.join(OUTPUT_DIR, OUTPUT_PREFIX)
-        if counter.save_to_json(output_path):
-            print(f"カウント結果: 右→左: {counter.right_to_left}, 左→右: {counter.left_to_right}")
+        if counter.save_to_json(OUTPUT_PREFIX):
+            total_counts = counter.get_total_counts()
+        print(f"カウント結果: 右→左: {total_counts['right_to_left']}, 左→右: {total_counts['left_to_right']}")
             
     except Exception as e:
         print(f"コールバックエラー: {e}")
