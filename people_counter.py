@@ -377,7 +377,7 @@ if __name__ == "__main__":
 
     # Picamera2の初期化
     picam2 = Picamera2(imx500.camera_num)
-    main = {'format': 'RGBX8888'}
+    main = {'format': 'XRGB8888'}
     config = picam2.create_preview_configuration(main, controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
 
     print("カメラとAIモデルを初期化中...")
