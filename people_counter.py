@@ -346,6 +346,9 @@ if __name__ == "__main__":
     if intrinsics.preserve_aspect_ratio:
         imx500.set_auto_aspect_ratio()
 
+    print("カメラの状態:", picam2.state)
+    print("カメラ設定:", picam2.camera_config)
+
     # マルチプロセスとキューの設定
     pool = multiprocessing.Pool(processes=4)
     jobs = queue.Queue()
@@ -366,7 +369,18 @@ if __name__ == "__main__":
             # フレームをキャプチャ
             request = picam2.capture_request()
             metadata = request.get_metadata()
+
+            # リクエストが正しく取得できたか確認
+            if request is None or not hasattr(request, 'request') or request.request is None:
+                print("警告: カメラリクエストが正しく取得できませんでした")
+                continue
             
+            metadata = request.get_metadata()
+            if metadata is None:
+                print("警告: メタデータが取得できませんでした")
+                request.release()
+                continue
+
             if metadata:
                 # 検出処理を非同期で実行
                 async_result = pool.apply_async(parse_detections, (metadata,))
@@ -395,6 +409,14 @@ if __name__ == "__main__":
             else:
                 request.release()
                 
+    except Exception as e:
+        print(f"エラーが発生しました: {e}")
+        if 'request' in locals() and request is not None:
+            try:
+                request.release()
+            except:
+                pass
+        
     except KeyboardInterrupt:
         print("終了中...")
         # 最後のデータを保存
