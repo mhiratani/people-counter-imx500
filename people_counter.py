@@ -375,7 +375,17 @@ if __name__ == "__main__":
                 # 検出結果を取得して人物追跡を更新
                 detections = async_result.get()
                 if detections is not None:
-                    frame_width = request.get_metadata()["SensorWidth"]
+                    # 修正案1: 利用可能なキーを確認
+                    metadata = request.get_metadata()
+                    print("利用可能なメタデータキー:", metadata.keys())
+                    # デフォルト値を設定
+                    frame_width = metadata.get("SensorWidth", 640)  # 640はデフォルト値
+
+                    # 修正案2: 別の方法でフレーム幅を取得
+                    #frame_width = picam2.camera_properties["ScalerCropMaximum"][2]  # カメラプロパティから取得
+                    # 修正案3: ストリーム設定から取得
+                    #frame_width = picam2.stream_configuration["main"]["size"][0]  # ストリーム設定から取得
+
                     active_people = process_frame(detections, active_people, counter, frame_width)
                 
                 # 指定間隔ごとにJSONファイルに保存
@@ -393,6 +403,9 @@ if __name__ == "__main__":
         
     finally:
         # リソースの解放
+        jobs.put(None)  # 描画スレッドを終了させる
+        thread.join()   # スレッドの終了を待つ
         pool.close()
-        pool.join()
-        cv2.destroyAllWindows()
+        pool.join() 
+        picam2.stop()   # カメラを停止
+        cv2.destroyAllWindows()  # ウィンドウを閉じる
