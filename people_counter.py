@@ -33,6 +33,10 @@ COUNTING_INTERVAL = 60  # カウントデータを保存する間隔（秒）
 OUTPUT_DIR = "people_count_data"  # データ保存ディレクトリ
 OUTPUT_PREFIX = "people_count"  # 出力ファイル名のプレフィックス
 
+# グローバル変数
+active_people = []
+counter = None
+
 # ======= クラス定義 =======
 class Detection:
     def __init__(self, coords, category, conf, metadata):
@@ -120,34 +124,41 @@ class PeopleCounter:
 # ======= 検出と追跡の関数 =======
 def parse_detections(metadata: dict):
     """AIモデルの出力テンソルを解析し、検出された人物のリストを返す"""
-    bbox_normalization = intrinsics.bbox_normalization
+    try:
+        bbox_normalization = intrinsics.bbox_normalization
 
-    np_outputs = imx500.get_outputs(metadata, add_batch=True)
-    input_w, input_h = imx500.get_input_size()
-    if np_outputs is None:
-        return None
+        np_outputs = imx500.get_outputs(metadata, add_batch=True)
+        if np_outputs is None:
+            return None
+            
+        input_w, input_h = imx500.get_input_size()
         
-    if intrinsics.postprocess == "nanodet":
-        boxes, scores, classes = \
-            postprocess_nanodet_detection(outputs=np_outputs[0], conf=DETECTION_THRESHOLD, 
-                                         iou_thres=IOU_THRESHOLD, max_out_dets=MAX_DETECTIONS)[0]
-        from picamera2.devices.imx500.postprocess import scale_boxes
-        boxes = scale_boxes(boxes, 1, 1, input_h, input_w, False, False)
-    else:
-        boxes, scores, classes = np_outputs[0][0], np_outputs[1][0], np_outputs[2][0]
-        if bbox_normalization:
-            boxes = boxes / input_h
+        if intrinsics.postprocess == "nanodet":
+            boxes, scores, classes = \
+                postprocess_nanodet_detection(outputs=np_outputs[0], conf=DETECTION_THRESHOLD, 
+                                             iou_thres=IOU_THRESHOLD, max_out_dets=MAX_DETECTIONS)[0]
+            from picamera2.devices.imx500.postprocess import scale_boxes
+            boxes = scale_boxes(boxes, 1, 1, input_h, input_w, False, False)
+        else:
+            boxes, scores, classes = np_outputs[0][0], np_outputs[1][0], np_outputs[2][0]
+            if bbox_normalization:
+                boxes = boxes / input_h
 
-        boxes = np.array_split(boxes, 4, axis=1)
-        boxes = zip(*boxes)
+            boxes = np.array_split(boxes, 4, axis=1)
+            boxes = zip(*boxes)
 
-    # 人物クラスのみをフィルタリング
-    detections = [
-        Detection(box, category, score, metadata)
-        for box, score, category in zip(boxes, scores, classes)
-        if score > DETECTION_THRESHOLD and int(category) == PERSON_CLASS_ID
-    ]
-    return detections
+        # 人物クラスのみをフィルタリング
+        detections = [
+            Detection(box, category, score, metadata)
+            for box, score, category in zip(boxes, scores, classes)
+            if score > DETECTION_THRESHOLD and int(category) == PERSON_CLASS_ID
+        ]
+        return detections
+    except Exception as e:
+        print(f"検出処理エラー: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 @lru_cache
@@ -250,13 +261,27 @@ def process_frame(detections, active_people, counter, frame_width):
     return active_people
 
 
-# ======= 描画関数 =======
-def draw_results(jobs, active_people, counter):
-    """検出結果と分析情報を描画"""
-    while (job := jobs.get()) is not None:
-        request, async_result = job
-        detections = async_result.get()
+# ======= コールバック関数 =======
+def process_frame_callback(request):
+    """フレームごとの処理を行うコールバック関数"""
+    global active_people, counter
+    
+    try:
+        # メタデータを取得
+        metadata = request.get_metadata()
+        if metadata is None:
+            print("警告: メタデータが取得できませんでした")
+            return
+            
+        # フレーム幅を取得
+        frame_width = picam2.stream_configuration["main"]["size"][0]
         
+        # 検出処理
+        detections = parse_detections(metadata)
+        if detections is not None:
+            active_people = process_frame(detections, active_people, counter, frame_width)
+        
+        # 描画処理
         with MappedArray(request, 'main') as m:
             frame_height, frame_width = m.array.shape[:2]
             center_line_x = frame_width // 2
@@ -304,10 +329,15 @@ def draw_results(jobs, active_people, counter):
             cv2.putText(m.array, f"残り時間: {remaining}秒", 
                        (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
             
-            cv2.imshow('人流カウント', m.array)
-            cv2.waitKey(1)
+        # 指定間隔ごとにJSONファイルに保存
+        output_path = os.path.join(OUTPUT_DIR, OUTPUT_PREFIX)
+        if counter.save_to_json(output_path):
+            print(f"カウント結果: 右→左: {counter.right_to_left}, 左→右: {counter.left_to_right}")
             
-        request.release()
+    except Exception as e:
+        print(f"コールバックエラー: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # ======= メイン処理 =======
@@ -342,81 +372,39 @@ if __name__ == "__main__":
 
     print("カメラとAIモデルを初期化中...")
     imx500.show_network_fw_progress_bar()
-    picam2.start(config, show_preview=False)
-    if intrinsics.preserve_aspect_ratio:
-        imx500.set_auto_aspect_ratio()
-
-    print("カメラの状態:", picam2.state)
-    print("カメラ設定:", picam2.camera_config)
-
-    # マルチプロセスとキューの設定
-    pool = multiprocessing.Pool(processes=1)
-    jobs = queue.Queue()
+    
+    # カメラの設定と起動
+    try:
+        # 2段階の初期化
+        picam2.configure(config)
+        time.sleep(0.5)  # 少し待機
+        picam2.start(show_preview=True)  # プレビューを表示
+        
+        if intrinsics.preserve_aspect_ratio:
+            imx500.set_auto_aspect_ratio()
+            
+        print("カメラ起動完了")
+    except Exception as e:
+        print(f"カメラ初期化エラー: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
     # 人物追跡とカウントの初期化
     active_people = []
     start_time = time.time()
     counter = PeopleCounter(start_time)
 
-    # 描画スレッドの開始
-    thread = threading.Thread(target=draw_results, args=(jobs, active_people, counter))
-    thread.daemon = True
-    thread.start()
+    # コールバックを設定
+    picam2.pre_callback = process_frame_callback
 
     print(f"人流カウント開始 - {COUNTING_INTERVAL}秒ごとにデータを保存します")
+    
     try:
+        # メインループ - コールバックが処理を行うので、ここでは待機するだけ
         while True:
-            # フレームをキャプチャ
-            request = picam2.capture_request()
-            metadata = request.get_metadata()
-
-            # リクエストが正しく取得できたか確認
-            if request is None or not hasattr(request, 'request') or request.request is None:
-                print("警告: カメラリクエストが正しく取得できませんでした")
-                continue
+            time.sleep(1)  # CPUの負荷を減らすために少し待機
             
-            metadata = request.get_metadata()
-            if metadata is None:
-                print("警告: メタデータが取得できませんでした")
-                request.release()
-                continue
-
-            if metadata:
-                # 検出処理を非同期で実行
-                async_result = pool.apply_async(parse_detections, (metadata,))
-                jobs.put((request, async_result))
-                
-                # 検出結果を取得して人物追跡を更新
-                detections = async_result.get()
-                if detections is not None:
-                    # 修正案1: 利用可能なキーを確認
-                    metadata = request.get_metadata()
-                    print("利用可能なメタデータキー:", metadata.keys())
-                    # デフォルト値を設定
-                    frame_width = metadata.get("SensorWidth", 640)  # 640はデフォルト値
-
-                    # 修正案2: 別の方法でフレーム幅を取得
-                    #frame_width = picam2.camera_properties["ScalerCropMaximum"][2]  # カメラプロパティから取得
-                    # 修正案3: ストリーム設定から取得
-                    #frame_width = picam2.stream_configuration["main"]["size"][0]  # ストリーム設定から取得
-
-                    active_people = process_frame(detections, active_people, counter, frame_width)
-                
-                # 指定間隔ごとにJSONファイルに保存
-                output_path = os.path.join(OUTPUT_DIR, OUTPUT_PREFIX)
-                if counter.save_to_json(output_path):
-                    print(f"カウント結果: 右→左: {counter.right_to_left}, 左→右: {counter.left_to_right}")
-            else:
-                request.release()
-                
-    except Exception as e:
-        print(f"エラーが発生しました: {e}")
-        if 'request' in locals() and request is not None:
-            try:
-                request.release()
-            except:
-                pass
-        
     except KeyboardInterrupt:
         print("終了中...")
         # 最後のデータを保存
@@ -425,9 +413,8 @@ if __name__ == "__main__":
         
     finally:
         # リソースの解放
-        jobs.put(None)  # 描画スレッドを終了させる
-        thread.join()   # スレッドの終了を待つ
-        pool.close()
-        pool.join() 
-        picam2.stop()   # カメラを停止
-        cv2.destroyAllWindows()  # ウィンドウを閉じる
+        try:
+            picam2.stop()
+            cv2.destroyAllWindows()
+        except Exception as e:
+            print(f"終了処理エラー: {e}")
