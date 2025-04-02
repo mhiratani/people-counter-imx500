@@ -281,11 +281,6 @@ def process_frame_callback(request):
         # フレーム幅を取得
         # frame_width = picam2.stream_configuration["main"]["size"][0]
 
-        # 検出処理
-        detections = parse_detections(metadata)
-        if detections is not None:
-            active_people = process_frame(detections, active_people, counter, frame_width)
-        
         # 描画処理
         with MappedArray(request, 'main') as m:
             # 実際のフレームデータから取得（より安全）
@@ -295,6 +290,11 @@ def process_frame_callback(request):
             frame_height = actual_height
             frame_width = actual_width
             center_line_x = frame_width // 2
+
+            # 検出処理
+            detections = parse_detections(metadata)
+            if detections is not None:
+                active_people = process_frame(detections, active_people, counter, frame_width)
             
             # 中央ラインを描画
             cv2.line(m.array, (center_line_x, 0), (center_line_x, frame_height), 
