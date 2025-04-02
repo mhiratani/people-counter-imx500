@@ -350,7 +350,7 @@ if __name__ == "__main__":
     print("カメラ設定:", picam2.camera_config)
 
     # マルチプロセスとキューの設定
-    pool = multiprocessing.Pool(processes=4)
+    pool = multiprocessing.Pool(processes=1)
     jobs = queue.Queue()
 
     # 人物追跡とカウントの初期化
