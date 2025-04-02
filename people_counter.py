@@ -125,11 +125,15 @@ class PeopleCounter:
                 "total_counts": self.get_total_counts()
             }
             
-            # 出力ディレクトリを確認
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
+            # 初回実行時にタイムスタンプ付きの出力ディレクトリを作成
+            if not hasattr(self, 'output_dir_with_timestamp'):
+                start_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                self.output_dir_with_timestamp = f"{OUTPUT_DIR}_{start_timestamp}"
+                os.makedirs(self.output_dir_with_timestamp, exist_ok=True)
+                print(f"Created output directory: {self.output_dir_with_timestamp}")
             
             # ファイルパスを正しく構築
-            filename = os.path.join(OUTPUT_DIR, f"{filename_prefix}_{timestamp}.json")
+            filename = os.path.join(self.output_dir_with_timestamp, f"{filename_prefix}_{timestamp}.json")
             with open(filename, 'w') as f:
                 json.dump(data, f, indent=4)
             
@@ -140,7 +144,7 @@ class PeopleCounter:
             self.left_to_right = 0
             self.last_save_time = current_time
             return True
-        return False
+    return False
 
 
 # ======= 検出と追跡の関数 =======
