@@ -359,7 +359,7 @@ def process_frame_callback(request):
         # 指定間隔ごとにJSONファイルに保存
         if counter.save_to_json(OUTPUT_PREFIX):
             total_counts = counter.get_total_counts()
-        print(f"カウント結果: 右→左: {total_counts['right_to_left']}, 左→右: {total_counts['left_to_right']}")
+            print(f"カウント結果: 右→左: {total_counts['right_to_left']}, 左→右: {total_counts['left_to_right']}")
             
     except Exception as e:
         print(f"コールバックエラー: {e}")
