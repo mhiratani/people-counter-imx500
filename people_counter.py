@@ -144,7 +144,8 @@ class PeopleCounter:
             self.left_to_right = 0
             self.last_save_time = current_time
             return True
-    return False
+        
+        return False
 
 
 # ======= 検出と追跡の関数 =======
