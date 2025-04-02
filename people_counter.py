@@ -23,6 +23,11 @@ DETECTION_THRESHOLD = 0.55  # 検出信頼度の閾値
 IOU_THRESHOLD = 0.65  # 重複検出を除去するためのIOU閾値
 MAX_DETECTIONS = 10  # 1フレームあたりの最大検出数
 
+# フレーム幅と高さを固定値として定義
+FRAME_WIDTH = 640
+FRAME_HEIGHT = 480
+
+
 # 人流カウント設定
 PERSON_CLASS_ID = 0  # 人物クラスのID（通常COCOデータセットでは0）
 MAX_TRACKING_DISTANCE = 50  # 同一人物と判定する最大距離（ピクセル）
@@ -274,8 +279,8 @@ def process_frame_callback(request):
             return
             
         # フレーム幅を取得
-        frame_width = picam2.stream_configuration["main"]["size"][0]
-        
+        # frame_width = picam2.stream_configuration["main"]["size"][0]
+
         # 検出処理
         detections = parse_detections(metadata)
         if detections is not None:
@@ -283,7 +288,12 @@ def process_frame_callback(request):
         
         # 描画処理
         with MappedArray(request, 'main') as m:
-            frame_height, frame_width = m.array.shape[:2]
+            # 実際のフレームデータから取得（より安全）
+            actual_height, actual_width = m.array.shape[:2]
+            
+            # 実際の値を使用するか、何らかの理由で取得できない場合は固定値を使用
+            frame_height = actual_height
+            frame_width = actual_width
             center_line_x = frame_width // 2
             
             # 中央ラインを描画
@@ -367,7 +377,7 @@ if __name__ == "__main__":
 
     # Picamera2の初期化
     picam2 = Picamera2(imx500.camera_num)
-    main = {'format': 'RGB888'}
+    main = {'format': 'RGBX8888'}
     config = picam2.create_preview_configuration(main, controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
 
     print("カメラとAIモデルを初期化中...")
