@@ -41,6 +41,9 @@ active_people = []
 counter = None
 last_log_time = 0
 
+DEBUG_MODE = True  # デバッグモードのオン/オフ
+DEBUG_IMAGES_DIR = "debug_images"  # デバッグ画像の保存ディレクトリ
+
 # ======= クラス定義 =======
 class Detection:
     def __init__(self, coords, category, conf, metadata):
@@ -243,7 +246,7 @@ def track_people(detections, active_people):
     return new_people
 
 
-def check_line_crossing(person, center_line_x):
+def check_line_crossing(person, center_line_x, frame=None):
     """中央ラインを横切ったかチェック"""
     if len(person.trajectory) < 2 or person.counted:
         return None
@@ -255,10 +258,20 @@ def check_line_crossing(person, center_line_x):
     if (prev_x < center_line_x and curr_x >= center_line_x):
         person.counted = True
         person.crossed_direction = "left_to_right"
+        
+        # デバッグモードで画像を保存
+        if DEBUG_MODE and frame is not None:
+            save_debug_image(frame, person, center_line_x, "left_to_right")
+            
         return "left_to_right"
     elif (prev_x >= center_line_x and curr_x < center_line_x):
         person.counted = True
         person.crossed_direction = "right_to_left"
+        
+        # デバッグモードで画像を保存
+        if DEBUG_MODE and frame is not None:
+            save_debug_image(frame, person, center_line_x, "right_to_left")
+            
         return "right_to_left"
     
     return None
@@ -287,8 +300,41 @@ def process_frame(detections, active_people, counter, frame_width):
     
     return active_people
 
+def save_debug_image(frame, person, center_line_x, direction):
+    """デバッグ用に画像を保存する関数"""
+    try:
+        import cv2
+        from datetime import datetime
+        
+        # デバッグ画像ディレクトリがなければ作成
+        os.makedirs(DEBUG_IMAGES_DIR, exist_ok=True)
+        
+        # 画像にラインと人物のバウンディングボックスを描画
+        debug_frame = frame.copy()
+        
+        # 中央ラインを描画
+        cv2.line(debug_frame, (center_line_x, 0), (center_line_x, debug_frame.shape[0]), (0, 255, 0), 2)
+        
+        # 人物のバウンディングボックスを描画
+        x, y, w, h = person.box
+        cv2.rectangle(debug_frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
+        
+        # 軌跡を描画
+        for i in range(1, len(person.trajectory)):
+            cv2.line(debug_frame, person.trajectory[i-1], person.trajectory[i], (255, 0, 0), 2)
+        
+        # 情報テキストを追加
+        text = f"Person ID: {person.id}, Direction: {direction}"
+        cv2.putText(debug_frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        
+        # タイムスタンプ付きのファイル名で保存
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = os.path.join(DEBUG_IMAGES_DIR, f"crossing_{person.id}_{direction}_{timestamp}.jpg")
+        cv2.imwrite(filename, debug_frame)
+        print(f"デバッグ画像を保存しました: {filename}")
+    except Exception as e:
+        print(f"デバッグ画像保存エラー: {e}")
 
-# ======= コールバック関数 =======
 def process_frame_callback(request):
     """フレームごとの処理を行うコールバック関数"""
     global active_people, counter, last_log_time
@@ -307,7 +353,23 @@ def process_frame_callback(request):
             # 検出処理
             detections = parse_detections(metadata)
             if detections is not None:
-                active_people = process_frame(detections, active_people, counter, frame_width)
+                # 人物追跡を更新
+                active_people = track_people(detections, active_people)
+                
+                # デバッグモードの場合、フレーム画像をコピー
+                frame_copy = None
+                if DEBUG_MODE:
+                    frame_copy = m.array.copy()
+                
+                # ラインを横切った人をカウント
+                for person in active_people:
+                    direction = check_line_crossing(person, center_line_x, frame_copy)
+                    if direction:
+                        counter.update(direction)
+                        print(f"Person ID {person.id} crossed line: {direction}")
+                
+                # 古いトラッキング対象を削除
+                active_people = [p for p in active_people if time.time() - p.last_seen < TRACKING_TIMEOUT]
             
             # 定期的なログ出力
             current_time = time.time()
@@ -339,6 +401,10 @@ def process_frame_callback(request):
 if __name__ == "__main__":
     # 出力ディレクトリの作成
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    # デバッグディレクトリの作成
+    if DEBUG_MODE:
+        os.makedirs(DEBUG_IMAGES_DIR, exist_ok=True)
+        print(f"デバッグモード有効: 画像を {DEBUG_IMAGES_DIR} に保存")
 
     # IMX500の初期化
     print("IMX500 AIカメラモジュールを初期化中...")
