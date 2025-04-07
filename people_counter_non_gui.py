@@ -350,12 +350,12 @@ def save_image_at_startup(frame, center_line_x):
         cv2.line(debug_frame, (center_line_x, 0), (center_line_x, debug_frame.shape[0]), (0, 255, 0), 2)
         
         # 情報テキストを追加
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         text = f"Start Up Time: {timestamp}"
         cv2.putText(debug_frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
         
         # タイムスタンプ付きのファイル名で保存
-        filename = os.path.join(OUTPUT_DIR, f"{timestamp}_startupimage.jpg")
+        filename = os.path.join(OUTPUT_DIR, f"{OUTPUT_PREFIX}_{timestamp}_startupimage.jpg")
         cv2.imwrite(filename, debug_frame)
         print(f"起動時に画像を保存しました: {filename}")
     except Exception as e:
