@@ -40,7 +40,7 @@ LOG_INTERVAL = 5  # ログ出力間隔（秒）
 active_people = []
 counter = None
 last_log_time = 0
-start_up_image_saved = False  # 起動時に画像を保存したかどうか
+_startup_image_saved = [False]  # リストを使うことでミュータブルにする
 
 DEBUG_MODE = False  # デバッグモードのオン/オフ
 DEBUG_IMAGES_DIR = "debug_images"  # デバッグ画像の保存ディレクトリ
@@ -377,10 +377,12 @@ def process_frame_callback(request):
                 # 人物追跡を更新
                 active_people = track_people(detections, active_people)
                 
-                if start_up_image_saved is False:
+                # リストの要素として保存されているフラグをチェック
+                if not _startup_image_saved[0]:
                     # 起動時に画像を保存
                     save_image_at_startup(m.array, center_line_x)
-                    start_up_image_saved = True
+                    _startup_image_saved[0] = True
+                    print("起動時の画像を保存しました")
 
                 # デバッグモードの場合、フレーム画像をコピー
                 frame_copy = None
