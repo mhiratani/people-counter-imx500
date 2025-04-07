@@ -30,8 +30,8 @@ TRACKING_TIMEOUT = 5.0  # 人物を追跡し続ける最大時間（秒）
 COUNTING_INTERVAL = 60  # カウントデータを保存する間隔（秒）
 
 # 出力設定
-OUTPUT_DIR = "people_count_data"  # データ保存ディレクトリ
-OUTPUT_PREFIX = "people_count"  # 出力ファイル名のプレフィックス
+OUTPUT_DIR = "people_count_data"    # データ保存ディレクトリ
+OUTPUT_PREFIX = "cameraA"           # 出力ファイル名のプレフィックス(カメラ名を入れる)
 
 # ログ設定
 LOG_INTERVAL = 5  # ログ出力間隔（秒）
@@ -40,8 +40,9 @@ LOG_INTERVAL = 5  # ログ出力間隔（秒）
 active_people = []
 counter = None
 last_log_time = 0
+start_up_image_saved = False  # 起動時に画像を保存したかどうか
 
-DEBUG_MODE = True  # デバッグモードのオン/オフ
+DEBUG_MODE = False  # デバッグモードのオン/オフ
 DEBUG_IMAGES_DIR = "debug_images"  # デバッグ画像の保存ディレクトリ
 
 # ======= クラス定義 =======
@@ -114,7 +115,7 @@ class PeopleCounter:
             "total": self.total_right_to_left + self.total_left_to_right
         }
     
-    def save_to_json(self, filename_prefix=OUTPUT_PREFIX):
+    def save_to_json(self):
         """指定間隔でカウントデータをJSONファイルに保存"""
         current_time = time.time()
         # 指定間隔経過したらデータを保存
@@ -127,15 +128,8 @@ class PeopleCounter:
                 "total_counts": self.get_total_counts()
             }
             
-            # 初回実行時にタイムスタンプ付きの出力ディレクトリを作成
-            if not hasattr(self, 'output_dir_with_timestamp'):
-                start_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                self.output_dir_with_timestamp = f"{OUTPUT_DIR}_{start_timestamp}"
-                os.makedirs(self.output_dir_with_timestamp, exist_ok=True)
-                print(f"Created output directory: {self.output_dir_with_timestamp}")
-            
             # ファイルパスを正しく構築
-            filename = os.path.join(self.output_dir_with_timestamp, f"{filename_prefix}_{timestamp}.json")
+            filename = os.path.join(self.OUTPUT_DIR, f"{OUTPUT_PREFIX}_{timestamp}.json")
             with open(filename, 'w') as f:
                 json.dump(data, f, indent=4)
             
@@ -335,6 +329,33 @@ def save_debug_image(frame, person, center_line_x, direction):
     except Exception as e:
         print(f"デバッグ画像保存エラー: {e}")
 
+def save_image_at_startup(frame, center_line_x):
+    """起動時に画像を保存する関数"""
+    try:
+        import cv2
+        from datetime import datetime
+        
+        # デバッグ画像ディレクトリがなければ作成
+        os.makedirs(DEBUG_IMAGES_DIR, exist_ok=True)
+        
+        # 画像にラインと人物のバウンディングボックスを描画
+        debug_frame = frame.copy()
+        
+        # 中央ラインを描画
+        cv2.line(debug_frame, (center_line_x, 0), (center_line_x, debug_frame.shape[0]), (0, 255, 0), 2)
+        
+        # 情報テキストを追加
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        text = f"Start Up Time: {timestamp}"
+        cv2.putText(debug_frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        
+        # タイムスタンプ付きのファイル名で保存
+        filename = os.path.join(OUTPUT_DIR, f"{timestamp}_startupimage.jpg")
+        cv2.imwrite(filename, debug_frame)
+        print(f"起動時に画像を保存しました: {filename}")
+    except Exception as e:
+        print(f"起動時に画像を保存する関数の実行エラー: {e}")
+
 def process_frame_callback(request):
     """フレームごとの処理を行うコールバック関数"""
     global active_people, counter, last_log_time
@@ -356,6 +377,11 @@ def process_frame_callback(request):
                 # 人物追跡を更新
                 active_people = track_people(detections, active_people)
                 
+                if start_up_image_saved is False:
+                    # 起動時に画像を保存
+                    save_image_at_startup(m.array, center_line_x)
+                    start_up_image_saved = True
+
                 # デバッグモードの場合、フレーム画像をコピー
                 frame_copy = None
                 if DEBUG_MODE:
