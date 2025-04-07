@@ -69,6 +69,8 @@ class Person:
         self.first_seen = time.time()
         self.last_seen = time.time()
         self.crossed_direction = None
+        self.output_dir = OUTPUT_DIR
+        self.filename_prefix = OUTPUT_PREFIX
     
     def get_center(self):
         """バウンディングボックスの中心座標を取得"""
@@ -132,7 +134,7 @@ class PeopleCounter:
             }
             
             # ファイルパスを正しく構築
-            filename = os.path.join(self.OUTPUT_DIR, f"{OUTPUT_PREFIX}_{timestamp}.json")
+            filename = os.path.join(self.output_dir, f"{self.filename_prefix}_{timestamp}.json")
             with open(filename, 'w') as f:
                 json.dump(data, f, indent=4)
             
