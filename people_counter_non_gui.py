@@ -424,7 +424,7 @@ def process_frame_callback(request):
                 last_log_time = current_time
             
         # 指定間隔ごとにJSONファイルに保存
-        if counter.save_to_json(OUTPUT_PREFIX):
+        if counter.save_to_json(OUTPUT_DIR, OUTPUT_PREFIX):
             total_counts = counter.get_total_counts()
             print(f"カウント結果: 右→左: {total_counts['right_to_left']}, 左→右: {total_counts['left_to_right']}, 合計: {total_counts['total']}")
             
@@ -515,7 +515,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("終了中...")
         # 最後のデータを保存
-        counter.save_to_json(OUTPUT_PREFIX)
+        counter.save_to_json(OUTPUT_DIR, OUTPUT_PREFIX)
         
     finally:
         # リソースの解放
