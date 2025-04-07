@@ -45,6 +45,9 @@ _startup_image_saved = [False]  # リストを使うことでミュータブル�
 DEBUG_MODE = False  # デバッグモードのオン/オフ
 DEBUG_IMAGES_DIR = "debug_images"  # デバッグ画像の保存ディレクトリ
 
+def init_process_frame_callback():
+    process_frame_callback.image_saved = False
+
 # ======= クラス定義 =======
 class Detection:
     def __init__(self, coords, category, conf, metadata):
@@ -360,6 +363,10 @@ def process_frame_callback(request):
     """フレームごとの処理を行うコールバック関数"""
     global active_people, counter, last_log_time
     
+    # 関数の属性が初期化されていない場合は初期化
+    if not hasattr(process_frame_callback, 'image_saved'):
+        process_frame_callback.image_saved = False
+    
     try:
         # メタデータを取得
         metadata = request.get_metadata()
@@ -377,13 +384,13 @@ def process_frame_callback(request):
                 # 人物追跡を更新
                 active_people = track_people(detections, active_people)
                 
-                # リストの要素として保存されているフラグをチェック
-                if not _startup_image_saved[0]:
+                # 関数の属性を使用して画像保存状態を管理
+                if not process_frame_callback.image_saved:
                     # 起動時に画像を保存
                     save_image_at_startup(m.array, center_line_x)
-                    _startup_image_saved[0] = True
+                    process_frame_callback.image_saved = True
                     print("起動時の画像を保存しました")
-
+                
                 # デバッグモードの場合、フレーム画像をコピー
                 frame_copy = None
                 if DEBUG_MODE:
@@ -433,6 +440,9 @@ if __name__ == "__main__":
     if DEBUG_MODE:
         os.makedirs(DEBUG_IMAGES_DIR, exist_ok=True)
         print(f"デバッグモード有効: 画像を {DEBUG_IMAGES_DIR} に保存")
+
+    # 関数の属性を初期化
+    init_process_frame_callback()
 
     # IMX500の初期化
     print("IMX500 AIカメラモジュールを初期化中...")
