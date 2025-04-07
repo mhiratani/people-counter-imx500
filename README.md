@@ -69,7 +69,7 @@ python people_counter.py
 1. サービスファイルの作成
 
 ```bash
-sudo nano /etc/systemd/system/people-counter.service
+sudo vim /etc/systemd/system/people-counter.service
 ```
 
 以下の内容を追加（ユーザー名とパスは環境に合わせて変更）:
@@ -133,7 +133,7 @@ crontab -e
 passwd
 
 # SSHアクセス制限の設定
-sudo nano /etc/ssh/sshd_config
+sudo vim /etc/ssh/sshd_config
 ```
 
 推奨SSH設定:
@@ -146,7 +146,7 @@ PasswordAuthentication no
 ```bash
 mkdir -p ~/.ssh
 chmod 700 ~/.ssh
-nano ~/.ssh/authorized_keys
+vim ~/.ssh/authorized_keys
 # ここに公開鍵を貼り付け
 chmod 600 ~/.ssh/authorized_keys
 
