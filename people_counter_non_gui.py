@@ -40,7 +40,6 @@ LOG_INTERVAL = 5  # ログ出力間隔（秒）
 active_people = []
 counter = None
 last_log_time = 0
-_startup_image_saved = [False]  # リストを使うことでミュータブルにする
 
 DEBUG_MODE = False  # デバッグモードのオン/オフ
 DEBUG_IMAGES_DIR = "debug_images"  # デバッグ画像の保存ディレクトリ
@@ -87,13 +86,15 @@ class Person:
 
 
 class PeopleCounter:
-    def __init__(self, start_time):
+    def __init__(self, start_time, output_dir=OUTPUT_DIR, output_prefix=OUTPUT_PREFIX):
         self.right_to_left = 0  # 右から左へ移動（期間カウント）
         self.left_to_right = 0  # 左から右へ移動（期間カウント）
         self.total_right_to_left = 0  # 累積カウント
         self.total_left_to_right = 0  # 累積カウント
         self.start_time = start_time
         self.last_save_time = start_time
+        self.output_dir = output_dir
+        self.output_prefix = output_prefix
     
     def update(self, direction):
         """方向に基づいてカウンターを更新"""
@@ -134,7 +135,7 @@ class PeopleCounter:
             }
             
             # ファイルパスを正しく構築
-            filename = os.path.join(self.output_dir, f"{self.filename_prefix}_{timestamp}.json")
+            filename = os.path.join(self.output_dir, f"{self.output_prefix}_{timestamp}.json")
             with open(filename, 'w') as f:
                 json.dump(data, f, indent=4)
             
@@ -147,7 +148,6 @@ class PeopleCounter:
             return True
         
         return False
-
 
 # ======= 検出と追跡の関数 =======
 def parse_detections(metadata: dict):
@@ -424,7 +424,7 @@ def process_frame_callback(request):
                 last_log_time = current_time
             
         # 指定間隔ごとにJSONファイルに保存
-        if counter.save_to_json(OUTPUT_DIR, OUTPUT_PREFIX):
+        if counter.save_to_json():
             total_counts = counter.get_total_counts()
             print(f"カウント結果: 右→左: {total_counts['right_to_left']}, 左→右: {total_counts['left_to_right']}, 合計: {total_counts['total']}")
             
@@ -497,7 +497,7 @@ if __name__ == "__main__":
     # 人物追跡とカウントの初期化
     active_people = []
     start_time = time.time()
-    counter = PeopleCounter(start_time)
+    counter = PeopleCounter(start_time, OUTPUT_DIR, OUTPUT_PREFIX)
     last_log_time = start_time
 
     # コールバックを設定
@@ -515,7 +515,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("終了中...")
         # 最後のデータを保存
-        counter.save_to_json(OUTPUT_DIR, OUTPUT_PREFIX)
+        counter.save_to_json()
         
     finally:
         # リソースの解放
