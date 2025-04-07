@@ -1,3 +1,6 @@
 opencv-python
 numpy
 picamera2
+# for uploading to S3
+boto3
+load_dotenv
