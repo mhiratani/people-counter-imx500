@@ -358,7 +358,7 @@ def save_image_at_startup(frame, center_line_x):
 
 def process_frame_callback(request):
     """フレームごとの処理を行うコールバック関数"""
-    global active_people, counter, last_log_time, start_up_image_saved
+    global active_people, counter, last_log_time
     
     try:
         # メタデータを取得
