@@ -98,7 +98,6 @@ class PeopleCounter:
         return {
             "right_to_left": self.right_to_left,
             "left_to_right": self.left_to_right,
-            "total": self.right_to_left + self.left_to_right
         }
     
     def get_total_counts(self):
@@ -106,7 +105,6 @@ class PeopleCounter:
         return {
             "right_to_left": self.total_right_to_left,
             "left_to_right": self.total_left_to_right,
-            "total": self.total_right_to_left + self.total_left_to_right
         }
     
     def save_to_json(self, filename_prefix=OUTPUT_PREFIX):
