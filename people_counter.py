@@ -347,9 +347,7 @@ def process_frame_callback(request):
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             cv2.putText(m.array, f"left_to_right: {total_counts['left_to_right']}", 
                     (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(m.array, f"total: {total_counts['total']}", 
-                    (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-            
+
             # 経過時間表示
             elapsed = int(time.time() - counter.last_save_time)
             remaining = COUNTING_INTERVAL - elapsed
