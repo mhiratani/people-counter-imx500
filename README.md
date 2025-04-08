@@ -2,22 +2,20 @@
 
 ## 概要
 
-本システムは、Raspberry Pi とIMX500 AIカメラモジュールを使用した人流カウントシステムです。特定の時間帯のみ稼働するスケジュール機能を備え、人の移動方向を検出してカウントします。
+本システムは、GUIを準備してないRaspberry Pi とIMX500 AIカメラモジュールを使用した人流カウントシステムです。ここでは人の移動方向を検出してカウントします。cronによるスケジュール運用機能についても記載します。
 
 ## 機能
 
 - IMX500 AIカメラモジュールによる人物検出
 - 指定ラインを横切る人の方向別カウント
-- スケジュール運用機能（特定時間帯のみ稼働）
 - JSONファイルへのカウントデータ保存
-- ヘッドレス環境に最適化された軽量実装
+- GUIを不要で実行可能
 
 ## 必要条件
 
 - Raspberry Pi（3B+以上推奨）
 - IMX500 AIカメラモジュール
 - Raspberry Pi OS（Bullseye以降）
-- インターネット接続（初期セットアップ時）
 
 ## セットアップ手順
 
@@ -59,7 +57,7 @@ ls -la /usr/share/imx500-models/
 
 ```bash
 # プログラム実行
-python people_counter.py
+python people_counter_non_gui.py
 ```
 
 ## 時間制限運用設定
@@ -69,7 +67,7 @@ python people_counter.py
 1. サービスファイルの作成
 
 ```bash
-sudo vim /etc/systemd/system/people-counter.service
+sudo vim /etc/systemd/system/people-counter-non-gui.service
 ```
 
 以下の内容を追加（ユーザー名とパスは環境に合わせて変更）:
@@ -80,14 +78,14 @@ Description=People Counter Service
 After=network.target
 
 [Service]
-User=hiratani
-WorkingDirectory=/home/hiratani/people_counter
-ExecStart=/home/hiratani/people_counter/venv/bin/python /home/hiratani/people_counter/people_counter_non_gui.py
+User=change_here_user_name
+WorkingDirectory=/home/change_here_user_name/people_counter_imx500
+ExecStart=/home/change_here_user_name/people_counter_imx500/venv/bin/python /home/change_here_user_name/people_counter_imx500/people_counter_non_gui.py
 Restart=on-failure
 RestartSec=10
 StandardOutput=syslog
 StandardError=syslog
-SyslogIdentifier=people-counter
+SyslogIdentifier=people-counter-non-gui
 
 [Install]
 WantedBy=multi-user.target
@@ -97,7 +95,7 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl disable people-counter  # 自動起動を無効化
+sudo systemctl disable people-counter-non-gui  # 自動起動を無効化
 ```
 
 3. cronによるスケジュール設定
@@ -110,49 +108,22 @@ crontab -e
 
 ```
 # 平日（月〜金）の朝8時に開始、夜10時に停止
-0 8 * * 1-5 sudo systemctl start people-counter
-0 22 * * 1-5 sudo systemctl stop people-counter
+0 8 * * 1-5 sudo systemctl start people-counter-non-gui
+0 22 * * 1-5 sudo systemctl stop people-counter-non-gui
 
 # 土曜日は朝9時から夜9時まで
-0 9 * * 6 sudo systemctl start people-counter
-0 21 * * 6 sudo systemctl stop people-counter
+0 9 * * 6 sudo systemctl start people-counter-non-gui
+0 21 * * 6 sudo systemctl stop people-counter-non-gui
 ```
 
 ## カスタマイズ
 
-`people_counter.py`内の以下のパラメータを調整できます:
+`people_counter_non_gui.py`内の以下のパラメータを調整できます:
 
 - `DETECTION_THRESHOLD`: 検出信頼度の閾値（デフォルト: 0.5）
 - `MAX_TRACKING_DISTANCE`: 同一人物と判定する最大距離（ピクセル単位）
 - `COUNTING_INTERVAL`: データ保存間隔（秒）
 
-## セキュリティ対策
-
-```bash
-# デフォルトパスワードの変更
-passwd
-
-# SSHアクセス制限の設定
-sudo vim /etc/ssh/sshd_config
-```
-
-推奨SSH設定:
-```
-PermitRootLogin no
-PasswordAuthentication no
-```
-
-公開鍵認証の設定:
-```bash
-mkdir -p ~/.ssh
-chmod 700 ~/.ssh
-vim ~/.ssh/authorized_keys
-# ここに公開鍵を貼り付け
-chmod 600 ~/.ssh/authorized_keys
-
-# SSHサービス再起動
-sudo systemctl restart ssh
-```
 
 ## トラブルシューティング
 
@@ -186,7 +157,7 @@ sudo apt install --reinstall python3-picamera2 imx500-all
 
 ```bash
 # エラーログの確認
-sudo journalctl -u people-counter -n 50
+sudo journalctl -u people-counter-non-gui -n 50
 
 # cronログの確認
 grep CRON /var/log/syslog
@@ -210,5 +181,110 @@ source venv/bin/activate
 python test_imx500.py
 
 # サービス状態確認
-sudo systemctl status people-counter
+sudo systemctl status people-counter-non-gui
+
+# サービスログの確認
+journalctl -u people-counter-non-gui.service -n 20
+```
+
+## Note
+
+### セキュリティ対策
+
+```bash
+# デフォルトパスワードの変更
+passwd
+
+# SSHアクセス制限の設定
+sudo vim /etc/ssh/sshd_config
+```
+
+推奨SSH設定:
+```
+PermitRootLogin no
+PasswordAuthentication no
+```
+
+公開鍵認証の設定:
+```bash
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+vim ~/.ssh/authorized_keys
+# ここに公開鍵を貼り付け
+chmod 600 ~/.ssh/authorized_keys
+
+# SSHサービス再起動
+sudo systemctl restart ssh
+```
+
+### jsonファイルのアップロード
+
+#### S3へのアップロード処理(upload_directory_to_s3.py)をシステムサービス登録して定期的に実行する設定
+
+0. 実行前の設定(環境変数を設定)
+```text
+AWS_ACCESS_KEY_ID       = XXXXXXXXXXXXXXXXXXXXX
+AWS_SECRET_ACCESS_KEY   = xyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzz
+AWS_REGION              = ap-northeast-1
+LOCAL_DIRECTORY         = /home/change_here_user_name/people_counter_imx500/people_count_data
+S3_BUCKET_NAME          = plese-change-here-bucket-name
+S3_PREFIX               = this is option
+DELETE_AFTER_UPLOAD     = true(アップロード後削除) or false(アップロード後削除しない)
+```
+   
+
+1. サービスファイルの作成
+
+```bash
+sudo vim /etc/systemd/system/upload-directory-to-s3.service
+```
+
+以下の内容を追加（ユーザー名とパスは環境に合わせて変更）:
+
+```ini
+[Unit]
+Description=Upload Directory to S3
+After=network.target
+
+[Service]
+User=change_here_user_name
+WorkingDirectory=/home/change_here_user_name/people_counter_imx500
+ExecStart=/home/change_here_user_name/people_counter_imx500/venv/bin/python /home/change_here_user_name/people_counter_imx500/upload_directory_to_s3.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=upload-directory-to-s3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+2. サービスの設定
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl disable upload-directory-to-s3  # 自動起動を無効化
+```
+
+3. cronによるスケジュール設定
+
+```bash
+crontab -e
+```
+
+以下の例を追加（5分おきに実行の場合）:
+
+```
+*/5 * * * * sudo systemctl start upload-directory-to-s3
+```
+
+3. サービスの設定
+
+```bash
+# サービス状態確認
+sudo systemctl status upload-directory-to-s3
+
+# サービスログの確認
+journalctl -u upload-directory-to-s3.service -n 20
 ```
