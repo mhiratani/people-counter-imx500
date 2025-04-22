@@ -124,7 +124,7 @@ class PeopleCounter:
         current_time = time.time()
         # 指定間隔経過したらデータを保存
         if current_time - self.last_save_time >= COUNTING_INTERVAL:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
             data = {
                 "timestamp": timestamp,
                 "duration_seconds": int(current_time - self.last_save_time),
@@ -348,7 +348,7 @@ def save_image_at_startup(frame, center_line_x):
         cv2.line(debug_frame, (center_line_x, 0), (center_line_x, debug_frame.shape[0]), (0, 255, 0), 2)
         
         # 情報テキストを追加
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         text = f"Start Up Time: {timestamp}"
         cv2.putText(debug_frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
         

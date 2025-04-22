@@ -112,7 +112,7 @@ class PeopleCounter:
         current_time = time.time()
         # 指定間隔経過したらデータを保存
         if current_time - self.last_save_time >= COUNTING_INTERVAL:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
             data = {
                 "timestamp": timestamp,
                 "duration_seconds": int(current_time - self.last_save_time),
@@ -122,7 +122,7 @@ class PeopleCounter:
             
             # 初回実行時にタイムスタンプ付きの出力ディレクトリを作成
             if not hasattr(self, 'output_dir_with_timestamp'):
-                start_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                start_timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
                 self.output_dir_with_timestamp = f"{OUTPUT_DIR}_{start_timestamp}"
                 os.makedirs(self.output_dir_with_timestamp, exist_ok=True)
                 print(f"Created output directory: {self.output_dir_with_timestamp}")
