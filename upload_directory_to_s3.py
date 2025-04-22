@@ -2,6 +2,7 @@ import os
 import boto3
 from botocore.exceptions import ClientError
 import logging
+from datetime import datetime
 from dotenv import load_dotenv
 
 # .envファイルから環境変数を読み込む
@@ -78,8 +79,11 @@ if __name__ == "__main__":
     # .envから設定を読み込む）
     LOCAL_DIRECTORY = os.getenv('LOCAL_DIRECTORY')  # アップロードするローカルディレクトリのパス
     BUCKET_NAME = os.getenv('S3_BUCKET_NAME')       # S3バケット名
-    S3_PREFIX = os.getenv('S3_PREFIX','')           # プレフィックスが指定されていない場合は空文字列を使用
     DELETE_AFTER_UPLOAD = os.getenv('DELETE_AFTER_UPLOAD', 'false').lower() == 'true'  # アップロード後に削除するかどうか
+
+    # 現在の日付を使用してS3プレフィックスに設定
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    S3_PREFIX = os.getenv('S3_PREFIX', current_date)  # プレフィックスが指定されていない場合は日付を使用
     
     # ディレクトリをアップロード
     upload_directory_to_s3(LOCAL_DIRECTORY, BUCKET_NAME, S3_PREFIX, DELETE_AFTER_UPLOAD)
