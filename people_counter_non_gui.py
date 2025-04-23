@@ -413,15 +413,12 @@ def save_debug_image(frame, person, center_line_x, direction):
         print(f"デバッグ画像保存エラー: {e}")
 
 
-# --- save_image_at_startup (変更なし) ---
+# --- save_image_at_startup  ---
 def save_image_at_startup(frame, center_line_x):
     """起動時に画像を保存する関数"""
     try:
         import cv2
         from datetime import datetime
-
-        # デバッグ画像ディレクトリがなければ作成 (OUTPUT_DIRでも良いがDEBUG_IMAGES_DIRに合わせておく)
-        os.makedirs(DEBUG_IMAGES_DIR, exist_ok=True)
 
         # 画像にラインを描画
         debug_frame = frame.copy()
@@ -436,7 +433,7 @@ def save_image_at_startup(frame, center_line_x):
 
         # タイムスタンプ付きのファイル名で保存
         # ファイル名はOUTPUT_DIRではなくDEBUG_IMAGES_DIRに保存するように変更
-        filename = os.path.join(DEBUG_IMAGES_DIR, f"{OUTPUT_PREFIX}_{timestamp}_startupimage.jpg")
+        filename = os.path.join(OUTPUT_DIR, f"{OUTPUT_PREFIX}_{timestamp}_startupimage.jpg")
         cv2.imwrite(filename, debug_frame)
         print(f"起動時に画像を保存しました: {filename}")
     except Exception as e:
@@ -585,7 +582,6 @@ if __name__ == "__main__":
     active_people = [] # グローバル変数として初期化
     start_time = time.time()
     counter = PeopleCounter(start_time, OUTPUT_DIR, OUTPUT_PREFIX) # グローバル変数として初期化
-    global last_log_time # グローバル変数を使用宣言
     last_log_time = start_time
 
 
