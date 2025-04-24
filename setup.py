@@ -1,6 +1,10 @@
 import os
 import json
 import boto3
+from dotenv import load_dotenv
+
+# .envファイルから環境変数を読み込む
+load_dotenv()
 
 def input_camera_name():
     while True:
@@ -27,7 +31,7 @@ if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.abspath(__file__))
     camera_name_config_path = os.path.join(script_dir, "camera_name.json")
     local_config_path = os.path.join(script_dir, "config.json")
-    S3_BUCKET = os.environ.get("S3_BUCKET_NAME")  # .envや環境変数に登録しておく
+    S3_BUCKET = os.getenv('S3_BUCKET_NAME')  # .envや環境変数に登録しておく
 
     camera_name = input_camera_name()
     save_camera_name(camera_name, camera_name_config_path)
