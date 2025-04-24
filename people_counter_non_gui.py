@@ -445,7 +445,7 @@ def save_debug_image(frame, person, center_line_x, direction):
 
         # タイムスタンプ付きのファイル名で保存
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        filename = os.path.join(DEBUG_IMAGES_DIR, f"{timestamp}_crossing_{person.id}_{direction}.jpg")
+        filename = os.path.join(DEBUG_IMAGES_DIR, f"{OUTPUT_PREFIX}_{timestamp}_crossing_{person.id}_{direction}.jpg")
         cv2.imwrite(filename, debug_frame)
         print(f"デバッグ画像を保存しました: {filename}")
     except Exception as e:
