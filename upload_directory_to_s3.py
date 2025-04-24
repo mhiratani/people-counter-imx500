@@ -1,7 +1,6 @@
 import os
 import boto3
 from botocore.exceptions import ClientError
-import logging
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -32,7 +31,7 @@ def upload_directory_to_s3(local_directory, bucket_name, s3_prefix='', delete_af
     
     # ディレクトリが存在するか確認
     if not os.path.isdir(local_directory):
-        logging.error(f"ディレクトリが見つかりません: {local_directory}")
+        print(f"ディレクトリが見つかりません: {local_directory}")
         return False
     
     success = True
@@ -55,7 +54,7 @@ def upload_directory_to_s3(local_directory, bucket_name, s3_prefix='', delete_af
                 # アップロード成功したファイルを記録
                 uploaded_files.append(local_file_path)
             except ClientError as e:
-                logging.error(f"アップロード失敗: {local_file_path}, エラー: {e}")
+                print(f"アップロード失敗: {local_file_path}, エラー: {e}")
                 success = False
     
     # アップロード成功かつ削除オプションが有効な場合、ファイルのみを削除（ディレクトリ構造は維持）
@@ -65,7 +64,7 @@ def upload_directory_to_s3(local_directory, bucket_name, s3_prefix='', delete_af
                 os.remove(file_path)
                 print(f"削除しました: {file_path}")
             except OSError as e:
-                logging.error(f"ファイル削除失敗: {file_path}, エラー: {e}")
+                print(f"ファイル削除失敗: {file_path}, エラー: {e}")
                 # ファイル削除の失敗は全体の成功判定には影響させない
     
     if success:
