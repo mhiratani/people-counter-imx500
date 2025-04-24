@@ -23,12 +23,13 @@ MODEL_PATH = "/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_32
 
 # ======= 設定パラメータ ======= 
 # 設定は config.json に定義してそこから読み込む
-def load_config(path='config.json'):
+def load_config(path):
     with open(path, 'r') as f:
         config = json.load(f)
     return config
 
-config = load_config()
+config = load_config('config.json')
+camera_name = load_config('camera_name.json')
 
 # 人流カウント設定
 PERSON_CLASS_ID = config.get('DETECTION_THRESHOLD', 0)
@@ -76,7 +77,7 @@ COUNTING_INTERVAL = config.get('COUNTING_INTERVAL', 60)     # カウントデー
 
 # 出力設定
 OUTPUT_DIR = config.get('OUTPUT_DIR', 'people_count_data')  # データ保存ディレクトリ
-OUTPUT_PREFIX = config.get('OUTPUT_PREFIX', 'cameraA')      # 出力ファイル名のプレフィックス(カメラ名を入れる)
+OUTPUT_PREFIX = camera_name.get('CAMERA_NAME', 'cameraA')   # 出力ファイル名のプレフィックス(カメラ名はcamera_name.jsonから取得)
 
 DEBUG_MODE = config.get('DEBUG_MODE', 'False')              # デバッグモードのオン/オフ
 DEBUG_IMAGES_SUBDIR_NAME = config.get('DEBUG_IMAGES_SUBDIR_NAME', 'debug_images')
