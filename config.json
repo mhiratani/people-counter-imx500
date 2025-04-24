@@ -7,7 +7,6 @@
   "TRACKING_TIMEOUT": 5.0,
   "COUNTING_INTERVAL": 60,
   "OUTPUT_DIR": "people_count_data",
-  "OUTPUT_PREFIX": "cameraA",
   "DEBUG_MODE": false,
   "DEBUG_IMAGES_SUBDIR_NAME": "debug_images"
 }
