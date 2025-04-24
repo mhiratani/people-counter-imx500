@@ -16,18 +16,50 @@ from picamera2.devices.imx500 import (NetworkIntrinsics,
 
 # ======= 設定パラメータ（必要に応じて変更） =======
 # モデル設定
+# https://www.raspberrypi.com/documentation/accessories/ai-camera.html の
+# "Run the following script from the repository to run YOLOv8 object detection:"を参照して選んだモデル
 MODEL_PATH = "/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk"
-DETECTION_THRESHOLD = 0.55  # 検出信頼度の閾値
-IOU_THRESHOLD = 0.3  # !!! 新規追加: マッチングのためのIOU閾値
-MAX_DETECTIONS = 30  # 1フレームあたりの最大検出数 (増やす可能性も考慮し少し大きく)
-
-# フレーム幅と高さを固定値として定義
-FRAME_WIDTH = 1280
-FRAME_HEIGHT = 960
 
 # 人流カウント設定
 PERSON_CLASS_ID = 0  # 人物クラスのID（通常COCOデータセットでは0）
-MAX_TRACKING_DISTANCE = 100 # !!! 閾値を少し大きく - IOUとの組み合わせで判定
+
+MAX_TRACKING_DISTANCE = 60
+# ----------------------------------------------
+# 追跡対象と新しい検出結果の「中心点間距離」の最大許容値（ピクセル単位）。
+# この値以下ならマッチング候補と見なす。
+# - 値を大きくすると、急な移動や検出ずれにも追従しやすくなるが、近くの他人を誤ってマッチさせやすくなる。
+# - 値を小さくすると誤追跡は減るが、カメラ揺れ・一時ロスト・急な移動で追跡が切れやすくなる。
+# - 映像解像度、人物サイズ、フレームレート、移動速度に応じて現場で要チューニング。
+#   目安: 検出ボックスの幅の半分～1倍程度や、1フレームで起きうる最大移動距離
+# ----------------------------------------------
+
+DETECTION_THRESHOLD = 0.55
+# ----------------------------------------------
+# 検出器が出力する「検出信頼度スコア」の下限値。これ未満は無視する。
+# - 値を上げると誤検出（偽陽性）は減るが、見落とし（偽陰性）が増えやすい。
+# - 値を下げると検出感度は増すが、誤検出リスクが高まる。
+# - 適切な値は検出器（モデル）の特性、ターゲットとなる画面のノイズの多寡による。
+#   通常0.4～0.7程度を試行して決定。推奨: バリデーション動画でF1スコア最大化する値
+# ----------------------------------------------
+
+IOU_THRESHOLD = 0.3
+# ----------------------------------------------
+# マッチング時、追跡対象と検出結果の「バウンディングボックスの重なり（IoU）」の下限値。
+# この値より大きい場合のみ同一人物候補とする。
+# - 値を大きくすると、ほぼ完全な重なりでのみマッチし、誤追跡減だが途切れやすい。
+# - 値を小さくすると、多少のズレやサイズ変動も許容し、追跡の継続性は増すものの、近距離他人の誤マッチリスク増。
+# - 通常0.2～0.5あたりで調整（高フレームレート＆精度が良いカメラなら大きくできる）。
+#   人物サイズ/動きの激しさ/カメラの安定度で最適値が変わる。
+# ----------------------------------------------
+
+MAX_DETECTIONS = 30
+# ----------------------------------------------
+# 1フレームで扱う検出結果の最大数。これ以上は間引きされるか無視される。
+# - 混雑状況（同時に写る人数）や計算リソースに応じて適宜調整。
+# - 多すぎると計算負荷・誤追跡リスク増、少なすぎると本来追跡すべき人を取りこぼす。
+# - 現場映像の最大混雑人数よりやや余裕を持たせると安定。
+# ----------------------------------------------
+
 TRACKING_TIMEOUT = 5.0  # 人物を追跡し続ける最大時間（秒）
 COUNTING_INTERVAL = 60  # カウントデータを保存する間隔（秒）
 
@@ -162,7 +194,14 @@ class PeopleCounter:
 
 # ======= 検出と追跡の関数 =======
 def parse_detections(metadata: dict):
-    """AIモデルの出力テンソルを解析し、検出された人物のリストを返す"""
+    """
+    AIモデルの出力テンソルを解析し、検出された人物のリストを返す
+
+    :param metadata: モデル出力のメタデータ
+    :param intrinsics: モデル・カメラの内部パラメータ設定
+    :param picam2: カメラデバイスオブジェクト
+    :return: 検出された人物のDetectionオブジェクトリスト
+    """
     try:
         # intrinsicsはmain関数で初期化されるグローバル変数と仮定
         # picam2もmain関数で初期化されるグローバル変数と仮定
@@ -221,48 +260,57 @@ def get_labels():
         labels = [label for label in labels if label and label != "-"]
     return labels
 
-
-# --- IOU計算関数を追加 ---
 def calculate_iou(box1, box2):
     """
-    Calculate the Intersection over Union (IoU) of two bounding boxes.
-    box: [x, y, w, h]
+    IOU（交差率）を計算する関数
+    「左上隅・幅・高さ（[x, y, w, h]）」形式の矩形2つからIoUを算出します。
+    IoU（Intersection over Union）とは、物体検出モデルが予測したバウンディングボックスと
+    正解バウンディングボックス（アノテーション）との重なり具合を評価する指標です。
+    戻り値は「2つの矩形がどれくらい重なっているかの割合（0〜1）」
+    +-----------+
+    | box1      |
+    |   +-------|-------+
+    |   |   overlap     |
+    +---+-------+-------+
+        |      box2     |
+        +---------------+
+    上図のように、重なる部分がIoUの「intersecion」
     """
-    # box1, box2 format: [x, y, w, h]
+    # box1, box2 のフォーマット: [x, y, w, h]
     x1, y1, w1, h1 = box1
     x2, y2, w2, h2 = box2
 
-    # Convert to [x1, y1, x2, y2] format for easier calculation
+    # 計算しやすいように [x1, y1, x2, y2] 形式に変換する
     box1_tlbr = [x1, y1, x1 + w1, y1 + h1]
     box2_tlbr = [x2, y2, x2 + w2, y2 + h2]
 
-    # Determine the coordinates of the intersection rectangle
+    # 2つの矩形の共通部分（交差領域）の座標を求める
     x_intersect_min = max(box1_tlbr[0], box2_tlbr[0])
     y_intersect_min = max(box1_tlbr[1], box2_tlbr[1])
     x_intersect_max = min(box1_tlbr[2], box2_tlbr[2])
     y_intersect_max = min(box1_tlbr[3], box2_tlbr[3])
 
-    # Compute the area of intersection rectangle
+    # 交差領域の幅と高さを計算（重なりがなければ0となる）
     intersect_w = max(0, x_intersect_max - x_intersect_min)
     intersect_h = max(0, y_intersect_max - y_intersect_min)
     intersection_area = intersect_w * intersect_h
 
-    # Compute the area of both the prediction and ground-truth rectangles
+    # それぞれの矩形の面積を計算
     box1_area = w1 * h1
     box2_area = w2 * h2
 
-    # Compute the intersection over union by taking the intersection
-    # area and dividing it by the union area
+    # IoU（交差率）を計算
+    # IoU = 共通領域（intersection）/ 全領域（union）
     union_area = box1_area + box2_area - intersection_area
     iou = intersection_area / union_area if union_area > 0 else 0.0
 
     return iou
 
-
-# --- track_people 関数をハンガリアンアルゴリズムとIOUを使うように書き換え ---
 def track_people(detections, active_people):
     """
-    検出された人物と既存の追跡対象をマッチング (IOUと距離、ハンガリアンアルゴリズムを使用)
+    物体検出で得られた人物候補（detections）と、既存の追跡対象（active_people）を
+    効率的かつ精度良くマッチングし、追跡リストを更新します。
+    ※ IOUと距離、ハンガリアンアルゴリズムを使用
     """
     num_people = len(active_people)
     num_detections = len(detections)
@@ -344,7 +392,7 @@ def track_people(detections, active_people):
 
 
 def check_line_crossing(person, center_line_x, frame=None):
-    """中央ラインを横切ったかチェック (変更なし)"""
+    """中央ラインを横切ったかチェック"""
     if len(person.trajectory) < 2 or person.counted:
         return None
 
