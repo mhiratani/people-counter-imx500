@@ -1,7 +1,8 @@
-opencv-python
 numpy
 picamera2
-# for uploading to S3
-boto3
-load_dotenv
 scipy
+#画像保存用cv2
+opencv-python
+# for uploading to S3
+load_dotenv
+boto3

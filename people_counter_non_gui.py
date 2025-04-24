@@ -4,15 +4,17 @@ import sys
 import time
 from datetime import datetime
 from functools import lru_cache
-
 import numpy as np
-# scipyの線形割当アルゴリズムをインポート
-from scipy.optimize import linear_sum_assignment
+from scipy.optimize import linear_sum_assignment    # scipyの線形割当アルゴリズム
 
 from picamera2 import MappedArray, Picamera2
 from picamera2.devices import IMX500
 from picamera2.devices.imx500 import (NetworkIntrinsics,
                                       postprocess_nanodet_detection)
+from picamera2.devices.imx500.postprocess import scale_boxes
+
+# 画像保存用
+import cv2
 
 # ======= 設定パラメータ（必要に応じて変更） =======
 # モデル設定
@@ -71,8 +73,6 @@ OUTPUT_PREFIX = "cameraA"           # 出力ファイル名のプレフィック
 LOG_INTERVAL = 5  # ログ出力間隔（秒）
 
 # グローバル変数
-# active_people = [] # main関数で初期化する
-# counter = None # main関数で初期化する
 last_log_time = 0
 
 DEBUG_MODE = False  # デバッグモードのオン/オフ
@@ -207,8 +207,6 @@ def parse_detections(metadata: dict):
         # picam2もmain関数で初期化されるグローバル変数と仮定
         global intrinsics, picam2
 
-        bbox_normalization = intrinsics.bbox_normalization
-
         np_outputs = imx500.get_outputs(metadata, add_batch=True)
         if np_outputs is None:
             return [] # 検出がない場合は空リストを返す
@@ -219,7 +217,6 @@ def parse_detections(metadata: dict):
             boxes, scores, classes = \
                 postprocess_nanodet_detection(outputs=np_outputs[0], conf=DETECTION_THRESHOLD,
                                              iou_thres=IOU_THRESHOLD, max_out_dets=MAX_DETECTIONS)[0]
-            from picamera2.devices.imx500.postprocess import scale_boxes
             # NanoDetの出力ボックスは[x1, y1, x2, y2]形式なので[x, y, w, h]に変換
             boxes = scale_boxes(boxes, 1, 1, input_h, input_w, False, False)
             boxes = [[b[0], b[1], b[2]-b[0], b[3]-b[1]] for b in boxes] # [x1, y1, x2, y2] -> [x, y, w, h]
@@ -423,12 +420,6 @@ def check_line_crossing(person, center_line_x, frame=None):
 def save_debug_image(frame, person, center_line_x, direction):
     """デバッグ用に画像を保存する関数"""
     try:
-        import cv2
-        from datetime import datetime
-
-        # デバッグ画像ディレクトリがなければ作成
-        os.makedirs(DEBUG_IMAGES_DIR, exist_ok=True)
-
         # 画像にラインと人物のバウンディングボックスを描画
         debug_frame = frame.copy()
 
@@ -465,9 +456,6 @@ def save_debug_image(frame, person, center_line_x, direction):
 def save_image_at_startup(frame, center_line_x):
     """起動時に画像を保存する関数"""
     try:
-        import cv2
-        from datetime import datetime
-
         # 画像にラインを描画
         debug_frame = frame.copy()
 
