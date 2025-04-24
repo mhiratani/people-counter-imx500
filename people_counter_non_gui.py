@@ -89,7 +89,7 @@ def init_process_frame_callback():
         counter = PeopleCounter(time.time(), OUTPUT_DIR, OUTPUT_PREFIX)
 
 
-# ======= クラス定義 (変更なし) =======
+# ======= クラス定義 =======
 class Detection:
     def __init__(self, coords, category, conf, metadata):
         """検出オブジェクトを作成し、バウンディングボックス、カテゴリ、信頼度を記録"""
@@ -110,8 +110,6 @@ class Person:
         self.first_seen = time.time()
         self.last_seen = time.time()
         self.crossed_direction = None
-        # self.output_dir = OUTPUT_DIR # Personクラスで保持する必要はなさそう
-        # self.filename_prefix = OUTPUT_PREFIX # Personクラスで保持する必要はなさそう
 
     def get_center(self):
         """バウンディングボックスの中心座標を取得"""
@@ -237,7 +235,7 @@ def parse_detections(metadata: dict):
         ]
 
         # Detectionオブジェクト作成時に convert_inference_coords が呼ばれるため、
-        # ここで取得した box は既にフレームサイズに合わせた [x, y, w, h] 形式になっているはずです。
+        # ここで取得した box は既にフレームサイズに合わせた [x, y, w, h] 形式になっているはず
 
         return detections
     except Exception as e:
@@ -250,7 +248,6 @@ def parse_detections(metadata: dict):
 @lru_cache
 def get_labels():
     """モデルのラベルを取得"""
-    # intrinsicsはmain関数で初期化されるグローバル変数と仮定
     global intrinsics
     labels = intrinsics.labels
     if intrinsics.ignore_dash_labels:
@@ -416,7 +413,6 @@ def check_line_crossing(person, center_line_x, frame=None):
 
     return None
 
-# --- save_debug_image (変更なし) ---
 def save_debug_image(frame, person, center_line_x, direction):
     """デバッグ用に画像を保存する関数"""
     try:
@@ -468,7 +464,6 @@ def save_image_at_startup(frame, center_line_x):
         cv2.putText(debug_frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
         # タイムスタンプ付きのファイル名で保存
-        # ファイル名はOUTPUT_DIRではなくDEBUG_IMAGES_DIRに保存するように変更
         filename = os.path.join(OUTPUT_DIR, f"{OUTPUT_PREFIX}_{timestamp}_startupimage.jpg")
         cv2.imwrite(filename, debug_frame)
         print(f"起動時に画像を保存しました: {filename}")
@@ -476,7 +471,6 @@ def save_image_at_startup(frame, center_line_x):
         print(f"起動時に画像を保存する関数の実行エラー: {e}")
 
 
-# --- process_frame_callback (変更: track_peopleの呼び出しのみ) ---
 def process_frame_callback(request):
     """フレームごとの処理を行うコールバック関数"""
     global active_people, counter, last_log_time
@@ -497,7 +491,7 @@ def process_frame_callback(request):
             # 検出処理
             detections = parse_detections(metadata)
 
-        # フレームサイズを取得 (デバッグ画像保存やライン描画に必要)
+        # フレームサイズを取得 (デバッグ画像保存やライン描画で使用)
         with MappedArray(request, 'main') as m:
             frame_height, frame_width = m.array.shape[:2]
             center_line_x = frame_width // 2
@@ -554,7 +548,7 @@ def process_frame_callback(request):
         traceback.print_exc()
 
 
-# ======= メイン処理 (変更なし) =======
+# ======= メイン処理 =======
 if __name__ == "__main__":
     # 出力ディレクトリの作成
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -619,7 +613,6 @@ if __name__ == "__main__":
     start_time = time.time()
     counter = PeopleCounter(start_time, OUTPUT_DIR, OUTPUT_PREFIX) # グローバル変数として初期化
     last_log_time = start_time
-
 
     # コールバックを設定
     # コールバック関数はフレームが準備されるたびに呼ばれる
