@@ -16,16 +16,25 @@ from picamera2.devices.imx500.postprocess import scale_boxes
 # 画像保存用
 import cv2
 
-# ======= 設定パラメータ（必要に応じて変更） =======
 # モデル設定
 # https://www.raspberrypi.com/documentation/accessories/ai-camera.html の
 # "Run the following script from the repository to run YOLOv8 object detection:"を参照して選んだモデル
 MODEL_PATH = "/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk"
 
-# 人流カウント設定
-PERSON_CLASS_ID = 0  # 人物クラスのID（通常COCOデータセットでは0）
+# ======= 設定パラメータ ======= 
+# 設定は config.json に定義してそこから読み込む
+def load_config(path='config.json'):
+    with open(path, 'r') as f:
+        config = json.load(f)
+    return config
 
-MAX_TRACKING_DISTANCE = 60
+config = load_config()
+
+# 人流カウント設定
+PERSON_CLASS_ID = config.get('DETECTION_THRESHOLD', 0)
+# 人物クラスのID（通常COCOデータセットでは0）
+
+MAX_TRACKING_DISTANCE = config.get('MAX_TRACKING_DISTANCE', 60)
 # ----------------------------------------------
 # 追跡対象と新しい検出結果の「中心点間距離」の最大許容値（ピクセル単位）。
 # この値以下ならマッチング候補と見なす。
@@ -35,7 +44,7 @@ MAX_TRACKING_DISTANCE = 60
 #   目安: 検出ボックスの幅の半分～1倍程度や、1フレームで起きうる最大移動距離
 # ----------------------------------------------
 
-DETECTION_THRESHOLD = 0.55
+DETECTION_THRESHOLD = config.get('DETECTION_THRESHOLD', 0.55)
 # ----------------------------------------------
 # 検出器が出力する「検出信頼度スコア」の下限値。これ未満は無視する。
 # - 値を上げると誤検出（偽陽性）は減るが、見落とし（偽陰性）が増えやすい。
@@ -44,7 +53,7 @@ DETECTION_THRESHOLD = 0.55
 #   通常0.4～0.7程度を試行して決定。推奨: バリデーション動画でF1スコア最大化する値
 # ----------------------------------------------
 
-IOU_THRESHOLD = 0.3
+IOU_THRESHOLD = config.get('IOU_THRESHOLD', 0.3)
 # ----------------------------------------------
 # マッチング時、追跡対象と検出結果の「バウンディングボックスの重なり（IoU）」の下限値。
 # この値より大きい場合のみ同一人物候補とする。
@@ -54,7 +63,7 @@ IOU_THRESHOLD = 0.3
 #   人物サイズ/動きの激しさ/カメラの安定度で最適値が変わる。
 # ----------------------------------------------
 
-MAX_DETECTIONS = 30
+MAX_DETECTIONS = config.get('MAX_DETECTIONS', 30)
 # ----------------------------------------------
 # 1フレームで扱う検出結果の最大数。これ以上は間引きされるか無視される。
 # - 混雑状況（同時に写る人数）や計算リソースに応じて適宜調整。
@@ -62,21 +71,24 @@ MAX_DETECTIONS = 30
 # - 現場映像の最大混雑人数よりやや余裕を持たせると安定。
 # ----------------------------------------------
 
-TRACKING_TIMEOUT = 5.0  # 人物を追跡し続ける最大時間（秒）
-COUNTING_INTERVAL = 60  # カウントデータを保存する間隔（秒）
+TRACKING_TIMEOUT = config.get('TRACKING_TIMEOUT', 5.0)      # 人物を追跡し続ける最大時間（秒）
+COUNTING_INTERVAL = config.get('COUNTING_INTERVAL', 60)     # カウントデータを保存する間隔（秒）
 
 # 出力設定
-OUTPUT_DIR = "people_count_data"    # データ保存ディレクトリ
-OUTPUT_PREFIX = "cameraA"           # 出力ファイル名のプレフィックス(カメラ名を入れる)
+OUTPUT_DIR = config.get('OUTPUT_DIR', 'people_count_data')  # データ保存ディレクトリ
+OUTPUT_PREFIX = config.get('OUTPUT_PREFIX', 'cameraA')      # 出力ファイル名のプレフィックス(カメラ名を入れる)
+
+DEBUG_MODE = config.get('DEBUG_MODE', 'False')              # デバッグモードのオン/オフ
+DEBUG_IMAGES_SUBDIR_NAME = config.get('DEBUG_IMAGES_SUBDIR_NAME', 'debug_images')
+                                                           # デバッグディレクトリの名前
+# デバッグディレクトリを出力ディレクトリの配下に定義ディレクトリの名前
+DEBUG_IMAGES_DIR = os.path.join(OUTPUT_DIR, DEBUG_IMAGES_SUBDIR_NAME)
 
 # ログ設定
 LOG_INTERVAL = 5  # ログ出力間隔（秒）
 
 # グローバル変数
 last_log_time = 0
-
-DEBUG_MODE = False  # デバッグモードのオン/オフ
-DEBUG_IMAGES_DIR = "debug_images"  # デバッグ画像の保存ディレクトリ
 
 def init_process_frame_callback():
     # コールバック関数の属性を初期化
