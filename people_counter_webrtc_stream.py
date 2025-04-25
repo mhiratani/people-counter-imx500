@@ -377,41 +377,44 @@ def track_people(detections, active_people):
     if np.all(np.isinf(cost_matrix)):
         print("All cost_matrix elements are inf. No valid assignment possible.")
         return active_people
-    # ハンガリアンアルゴリズムを実行し、最適なマッチングを見つける
-    # matched_person_indices: active_peopleのインデックスの配列
-    # matched_detection_indices: detectionsのインデックスの配列
-    matched_person_indices, matched_detection_indices = linear_sum_assignment(cost_matrix)
 
-    # マッチング結果を処理
-    new_people = []
-    # マッチした検出結果のインデックスを記録
-    used_detections = set(matched_detection_indices)
+    else:
+        # ハンガリアンアルゴリズムを実行し、最適なマッチングを見つける
+        # matched_person_indices: active_peopleのインデックスの配列
+        # matched_detection_indices: detectionsのインデックスの配列
+        print("Will run linear_sum_assignment")
+        matched_person_indices, matched_detection_indices = linear_sum_assignment(cost_matrix)
 
-    # マッチした人物を更新して新しいリストに追加
-    for i, j in zip(matched_person_indices, matched_detection_indices):
-        # コストがinfの場合は有効なマッチではないのでスキップ (linear_sum_assignmentはinfも考慮する)
-        if cost_matrix[i, j] == np.inf:
-            continue
-        person = active_people[i]
-        detection = detections[j]
-        person.update(detection.box) # 人物情報を検出結果で更新
-        new_people.append(person)
-
-    # マッチしなかった既存の人物を新しいリストに追加 (タイムアウト判定は後で行われる)
-    matched_person_ids = {p.id for p in new_people} # 更新された人物のIDセット
-    for person in active_people:
-        if person.id not in matched_person_ids:
-            # この人物は今回のフレームでは検出されなかった
-            # 情報を更新しないままリストに追加。last_seenは前回のまま。
+        # マッチング結果を処理
+        new_people = []
+        # マッチした検出結果のインデックスを記録
+        used_detections = set(matched_detection_indices)
+    
+        # マッチした人物を更新して新しいリストに追加
+        for i, j in zip(matched_person_indices, matched_detection_indices):
+            # コストがinfの場合は有効なマッチではないのでスキップ (linear_sum_assignmentはinfも考慮する)
+            if cost_matrix[i, j] == np.inf:
+                continue
+            person = active_people[i]
+            detection = detections[j]
+            person.update(detection.box) # 人物情報を検出結果で更新
             new_people.append(person)
-
-    # マッチしなかった新しい検出結果を新しい人物としてリストに追加
-    for j, detection in enumerate(detections):
-        if j not in used_detections:
-            new_people.append(Person(detection.box)) # 新しい人物を作成
-
-    # ここではタイムアウト判定は行わない。process_frame_callbackでまとめて行う。
-    return new_people
+    
+        # マッチしなかった既存の人物を新しいリストに追加 (タイムアウト判定は後で行われる)
+        matched_person_ids = {p.id for p in new_people} # 更新された人物のIDセット
+        for person in active_people:
+            if person.id not in matched_person_ids:
+                # この人物は今回のフレームでは検出されなかった
+                # 情報を更新しないままリストに追加。last_seenは前回のまま。
+                new_people.append(person)
+    
+        # マッチしなかった新しい検出結果を新しい人物としてリストに追加
+        for j, detection in enumerate(detections):
+            if j not in used_detections:
+                new_people.append(Person(detection.box)) # 新しい人物を作成
+    
+        # ここではタイムアウト判定は行わない。process_frame_callbackでまとめて行う。
+        return new_people
 
 
 def check_line_crossing(person, center_line_x, frame=None):
