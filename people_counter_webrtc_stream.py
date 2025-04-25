@@ -677,7 +677,7 @@ if __name__ == "__main__":
         FRAME_WIDTH  = config.get('FRAME_WIDTH', 640)   # 環境にあわせ適宜
         FRAME_HEIGHT = config.get('FRAME_HEIGHT', 480)
         FRAME_RATE = int(intrinsics.inference_rate) if hasattr(intrinsics, 'inference_rate') else 15
-        RTSP_URL = "rtsp://0.0.0.0:8554/stream"   # カメラ側なら0.0.0.0でOK、streamlit表示側ではPCのIP指定
+        RTSP_URL = "rtsp://172.22.1.12:8554/stream"
 
         ffmpeg_cmd = [
             "ffmpeg",
