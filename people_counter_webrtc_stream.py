@@ -610,7 +610,6 @@ def process_frame_callback(request):
         except Exception as e:
             print(f"RTSP配信エラー: {e}")
 
-
     except Exception as e:
         print(f"コールバックエラー: {e}")
         import traceback
