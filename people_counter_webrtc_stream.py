@@ -540,10 +540,7 @@ def np_to_videoframe(frame: np.ndarray) -> VideoFrame:
     """OpenCV画像 (BGR) を aiortcのVideoFrameに変換"""
     # OpenCVはBGRなのでRGB変換
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    # VideoFrame(height, width, 'rgb24')
     video_frame = VideoFrame.from_ndarray(rgb_frame, format='rgb24')
-    video_frame.pts = None # 適切な値を設定しても可
-    video_frame.time_base = None
     return video_frame
 
 def process_frame_callback(request):
