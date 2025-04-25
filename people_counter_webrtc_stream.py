@@ -216,18 +216,6 @@ class PeopleCounter:
 
         return False
 
-class CameraTrack(VideoStreamTrack):
-    async def recv(self):
-        global latest_frame
-        while latest_frame is None:
-            await asyncio.sleep(0.01)
-        frame = latest_frame.copy()
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        video_frame = VideoFrame.from_ndarray(frame, format='rgb24')
-        video_frame.pts = self.next_timestamp()
-        video_frame.time_base = fractions.Fraction(1, 30)
-        return video_frame
-
 # ======= 検出と追跡の関数 =======
 def parse_detections(metadata: dict):
     """
