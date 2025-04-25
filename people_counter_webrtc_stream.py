@@ -496,13 +496,6 @@ def save_image_at_startup(frame, center_line_x):
     except Exception as e:
         print(f"起動時に画像を保存する関数の実行エラー: {e}")
 
-def np_to_videoframe(frame: np.ndarray) -> VideoFrame:
-    """OpenCV画像 (BGR) を aiortcのVideoFrameに変換"""
-    # OpenCVはBGRなのでRGB変換
-    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    video_frame = VideoFrame.from_ndarray(rgb_frame, format='rgb24')
-    return video_frame
-
 def process_frame_callback(request):
     """フレームごとの処理を行うコールバック関数"""
     global active_people, counter, last_log_time, latest_frame
