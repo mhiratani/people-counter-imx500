@@ -373,6 +373,10 @@ def track_people(detections, active_people):
                 # より高度なコスト例: cost = (1.0 - iou) + (distance / MAX_TRACKING_DISTANCE) * 0.1 # IOUを重視
                 cost_matrix[i, j] = cost
 
+    # コスト行列の全要素がinfの場合は対応
+    if np.all(np.isinf(cost_matrix)):
+        print("All cost_matrix elements are inf. No valid assignment possible.")
+        return active_people
     # ハンガリアンアルゴリズムを実行し、最適なマッチングを見つける
     # matched_person_indices: active_peopleのインデックスの配列
     # matched_detection_indices: detectionsのインデックスの配列
