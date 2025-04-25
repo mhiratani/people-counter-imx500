@@ -7,5 +7,4 @@ opencv-python
 load_dotenv
 boto3
 # webrtc
-aiortc[av]
-av
+subprocess

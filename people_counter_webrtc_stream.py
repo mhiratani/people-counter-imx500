@@ -17,12 +17,7 @@ from picamera2.devices.imx500.postprocess import scale_boxes
 import cv2
 
 # 常に最新の描画済みフレームだけ aiortc で WebRTC 配信用
-import threading
-import asyncio
-from aiortc import VideoStreamTrack, RTCPeerConnection, RTCSessionDescription
-from aiortc.contrib.signaling import BYE, TcpSocketSignaling
-from av import VideoFrame
-import fractions
+import subprocess
 
 # 描画設定
 LINE_COLOR = (0, 255, 0) # Green (BGR format for OpenCV)
@@ -232,29 +227,6 @@ class CameraTrack(VideoStreamTrack):
         video_frame.pts = self.next_timestamp()
         video_frame.time_base = fractions.Fraction(1, 30)
         return video_frame
-
-async def webrtc_server():
-    signaling = TcpSocketSignaling("0.0.0.0", 1234)  # 配信側は 0.0.0.0 で待ち受け,視聴側は「視聴したい配信サーバIMX500のIP」・1234番ポートで繋ぐ
-
-    await signaling.connect()
-    while True:
-        print("WebRTC: Peerからの接続待ち...")
-        offer = await signaling.receive()
-        if offer is None:
-            continue
-        pc = RTCPeerConnection()
-        pc.addTrack(CameraTrack())
-        await pc.setRemoteDescription(offer)
-        answer = await pc.createAnswer()
-        await pc.setLocalDescription(answer)
-        await signaling.send(pc.localDescription)
-        print("WebRTC: Peerと通信中...")
-        # BYEまでwait
-        while True:
-            msg = await signaling.receive()
-            if msg is BYE or msg is None:
-                break
-        await pc.close()
 
 # ======= 検出と追跡の関数 =======
 def parse_detections(metadata: dict):
@@ -649,8 +621,15 @@ def process_frame_callback(request):
 
         # 指定間隔ごとにJSONファイルに保存
         counter.save_to_json()
-        latest_frame = frame.copy() 
-        return np_to_videoframe(frame)
+
+        try:
+            # 必ずBGR formatでかつFRMEサイズに合わせること（多くの場合 [H, W, 3]）
+            if ffmpeg_proc and ffmpeg_proc.stdin:
+                ffmpeg_proc.stdin.write(frame.astype(np.uint8).tobytes())
+        except Exception as e:
+            print(f"RTSP配信エラー: {e}")
+
+        latest_frame = frame.copy()
 
     except Exception as e:
         print(f"コールバックエラー: {e}")
@@ -712,6 +691,35 @@ if __name__ == "__main__":
             imx500.set_auto_aspect_ratio()
             
         print("カメラ起動完了")
+
+        # RTSP配信用 設定値
+        FRAME_WIDTH  = config.get('FRAME_WIDTH', 640)   # 環境にあわせ適宜
+        FRAME_HEIGHT = config.get('FRAME_HEIGHT', 480)
+        FRAME_RATE = int(intrinsics.inference_rate) if hasattr(intrinsics, 'inference_rate') else 15
+        RTSP_URL = "rtsp://0.0.0.0:8554/stream"   # カメラ側なら0.0.0.0でOK、streamlit表示側ではPCのIP指定
+
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-re",
+            "-f", "rawvideo",
+            "-pix_fmt", "bgr24",
+            "-s", f"{FRAME_WIDTH}x{FRAME_HEIGHT}",
+            "-r", str(FRAME_RATE),
+            "-i", "-",              # 入力：標準入力
+            "-an",                  # 音声なし
+            "-c:v", "libx264",
+            "-preset", "ultrafast", # 低遅延
+            "-tune", "zerolatency",
+            "-f", "rtsp",
+            RTSP_URL
+        ]
+        try:
+            ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+            print("ffmpegによるRTSP配信プロセス起動")
+        except Exception as e:
+            print(f"ffmpeg起動失敗: {e}")
+            sys.exit(1)
+
     except Exception as e:
         print(f"カメラ初期化エラーまたはIMX500初期化エラー: {e}")
         import traceback
@@ -727,11 +735,6 @@ if __name__ == "__main__":
     # コールバックを設定
     # コールバック関数はフレームが準備されるたびに呼ばれる
     picam2.pre_callback = process_frame_callback
-
-    # << WebRTCサーバをバックグラウンドで起動 >>
-    loop = asyncio.get_event_loop()
-    t = threading.Thread(target=loop.run_until_complete, args=(webrtc_server(),), daemon=True)
-    t.start()
 
     print(f"人流カウント開始 - {COUNTING_INTERVAL}秒ごとにデータを保存します")
     print(f"ログは{LOG_INTERVAL}秒ごとに出力されます")
@@ -758,6 +761,14 @@ if __name__ == "__main__":
             if 'imx500' in locals() and imx500: # imx500が初期化されているか確認
                 imx500.close() # AIモジュールを閉じる
                 print("IMX500モジュールを閉じました")
+
+            if 'ffmpeg_proc' in locals() and ffmpeg_proc:
+                try:
+                    ffmpeg_proc.stdin.close()
+                    ffmpeg_proc.terminate()
+                    print("ffmpeg RTSPプロセス終了")
+                except Exception as e:
+                    print(f"ffmpeg終了エラー: {e}")
 
             print("プログラムを終了します")
         except Exception as e:
