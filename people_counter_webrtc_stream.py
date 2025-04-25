@@ -373,11 +373,14 @@ def track_people(detections, active_people):
                 # より高度なコスト例: cost = (1.0 - iou) + (distance / MAX_TRACKING_DISTANCE) * 0.1 # IOUを重視
                 cost_matrix[i, j] = cost
 
-    # コスト行列の全要素がinfの場合は対応
-    if np.all(np.isinf(cost_matrix)):
-        print("All cost_matrix elements are inf. No valid assignment possible.")
+    # コスト行列の全要素がinf or どの行or列も全てinfならreturn
+    if (
+        np.all(np.isinf(cost_matrix)) or 
+        np.any(np.all(np.isinf(cost_matrix), axis=0)) or 
+        np.any(np.all(np.isinf(cost_matrix), axis=1))
+    ):
+        # print("Assignment infeasible: some row or column is all inf.")
         return active_people
-
     else:
         # ハンガリアンアルゴリズムを実行し、最適なマッチングを見つける
         # matched_person_indices: active_peopleのインデックスの配列
@@ -389,7 +392,7 @@ def track_people(detections, active_people):
         new_people = []
         # マッチした検出結果のインデックスを記録
         used_detections = set(matched_detection_indices)
-    
+
         # マッチした人物を更新して新しいリストに追加
         for i, j in zip(matched_person_indices, matched_detection_indices):
             # コストがinfの場合は有効なマッチではないのでスキップ (linear_sum_assignmentはinfも考慮する)
@@ -399,7 +402,7 @@ def track_people(detections, active_people):
             detection = detections[j]
             person.update(detection.box) # 人物情報を検出結果で更新
             new_people.append(person)
-    
+
         # マッチしなかった既存の人物を新しいリストに追加 (タイムアウト判定は後で行われる)
         matched_person_ids = {p.id for p in new_people} # 更新された人物のIDセット
         for person in active_people:
@@ -407,12 +410,12 @@ def track_people(detections, active_people):
                 # この人物は今回のフレームでは検出されなかった
                 # 情報を更新しないままリストに追加。last_seenは前回のまま。
                 new_people.append(person)
-    
+
         # マッチしなかった新しい検出結果を新しい人物としてリストに追加
         for j, detection in enumerate(detections):
             if j not in used_detections:
                 new_people.append(Person(detection.box)) # 新しい人物を作成
-    
+
         # ここではタイムアウト判定は行わない。process_frame_callbackでまとめて行う。
         return new_people
 
