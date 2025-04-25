@@ -385,7 +385,7 @@ def track_people(detections, active_people):
         # ハンガリアンアルゴリズムを実行し、最適なマッチングを見つける
         # matched_person_indices: active_peopleのインデックスの配列
         # matched_detection_indices: detectionsのインデックスの配列
-        print("Will run linear_sum_assignment")
+        # print("Will run linear_sum_assignment")
         matched_person_indices, matched_detection_indices = linear_sum_assignment(cost_matrix)
 
         # マッチング結果を処理
@@ -428,7 +428,7 @@ def check_line_crossing(person, center_line_x, frame=None):
     prev_x = person.trajectory[-2][0]
     curr_x = person.trajectory[-1][0]
 
-    # 中央ラインを横切った場合
+    # 左→右: 中央線を未満→以上で通過
     if (prev_x < center_line_x and curr_x >= center_line_x):
         person.counted = True
         person.crossed_direction = "left_to_right"
@@ -438,6 +438,7 @@ def check_line_crossing(person, center_line_x, frame=None):
             save_debug_image(frame, person, center_line_x, "left_to_right")
 
         return "left_to_right"
+    # 右→左: 中央線を以上→未満で通過
     elif (prev_x >= center_line_x and curr_x < center_line_x):
         person.counted = True
         person.crossed_direction = "right_to_left"
@@ -445,6 +446,8 @@ def check_line_crossing(person, center_line_x, frame=None):
         # デバッグモードで画像を保存
         if DEBUG_MODE and frame is not None:
             save_debug_image(frame, person, center_line_x, "right_to_left")
+
+        return "right_to_left"
 
     return None
 
@@ -525,7 +528,7 @@ def process_frame_callback(request):
             # 検出処理
             detections = parse_detections(metadata)
 
-        # 人物追跡を更新 - 書き換えた track_people 関数を呼び出す
+        # 人物追跡を更新
         active_people = track_people(detections, active_people)
         if not isinstance(active_people, list):
             print(f"track_people returned : {type(active_people)}")
@@ -540,8 +543,7 @@ def process_frame_callback(request):
             cv2.line(frame, (center_line_x, 0), (center_line_x, frame_height), LINE_COLOR, THICKNESS)
 
             # 人物ごとにバウンディングボックス、軌跡、IDを描画
-            people_to_process = active_people[:]
-            for person in people_to_process:
+            for person in active_people:
                 # バウンディングボックス
                 x, y, w, h = map(int, person.box)
                 cv2.rectangle(frame, (x, y), (x + w, y + h), BOX_COLOR, THICKNESS)
@@ -557,19 +559,13 @@ def process_frame_callback(request):
                 text_pos = (x, y - 5) if y > 15 else (x, y + h + 15)
                 cv2.putText(frame, text, text_pos, FONT, int(FONT_SCALE * 0.6), TEXT_COLOR, THICKNESS)
 
-                # 必要ならライン横断チェック
-                direction = check_line_crossing(person, center_line_x, frame)
-                if direction:
-                    counter.update(direction)
-                    print(f"Person ID {person.id} crossed line: {direction}")
-
             # ステータス情報
             status_text = f"Active: {len(active_people)} | Period (R->L: {counter.right_to_left}, L->R: {counter.left_to_right})"
             cv2.putText(frame, status_text, (10, 30), FONT, FONT_SCALE, TEXT_COLOR, THICKNESS)
             total_counts = counter.get_total_counts()
             total_text = f"Total (R->L: {total_counts['right_to_left']}, L->R: {total_counts['left_to_right']})"
             cv2.putText(frame, total_text, (10, 65), FONT, FONT_SCALE, TEXT_COLOR, THICKNESS)
-            # --- 描画処理ここまで ---
+            # --- 描画ここまで ---
 
             # 起動時の画像を一度だけ保存
             if not process_frame_callback.image_saved:
@@ -583,11 +579,10 @@ def process_frame_callback(request):
                 frame_copy = m.array.copy()
 
         # ラインを横切った人をカウント
-        # 注意: ここで active_people の中には更新されたものと更新されなかったものが混在
         for person in active_people:
             # 少なくとも2フレーム以上の軌跡がある、かつ、まだカウントされていない人物が対象
-            if len(person.trajectory) >= 2 and not person.counted:
-                direction = check_line_crossing(person, center_line_x, frame_copy)
+            if len(person.trajectory) >= 2 and not getattr(person, "counted", False):
+                direction = check_line_crossing(person, center_line_x)
                 if direction:
                     counter.update(direction)
                     print(f"Person ID {person.id} crossed line: {direction}")
