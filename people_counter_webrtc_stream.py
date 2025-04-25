@@ -519,6 +519,11 @@ def process_frame_callback(request):
             # 検出処理
             detections = parse_detections(metadata)
 
+        # 人物追跡を更新 - 書き換えた track_people 関数を呼び出す
+        active_people = track_people(detections, active_people)
+        if not isinstance(active_people, list):
+            print(f"track_people returned : {type(active_people)}")
+
         # フレームサイズを取得 (デバッグ画像保存やライン描画で使用)
         with MappedArray(request, 'main') as m:
             frame_height, frame_width = m.array.shape[:2]
@@ -571,9 +576,6 @@ def process_frame_callback(request):
             if DEBUG_MODE:
                 frame_copy = m.array.copy()
 
-        # 人物追跡を更新 - 書き換えた track_people 関数を呼び出す
-        active_people = track_people(detections, active_people)
-
         # ラインを横切った人をカウント
         # 注意: ここで active_people の中には更新されたものと更新されなかったものが混在
         for person in active_people:
@@ -601,7 +603,7 @@ def process_frame_callback(request):
             print(f"Next save in: {remaining} seconds")
             print(f"--------------------------------------------------")
 
-            last_log_time = current_time
+        last_log_time = current_time
 
         # 指定間隔ごとにJSONファイルに保存
         counter.save_to_json()
