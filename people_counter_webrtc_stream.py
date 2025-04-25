@@ -582,9 +582,10 @@ def process_frame_callback(request):
         for person in active_people:
             # 少なくとも2フレーム以上の軌跡がある、かつ、まだカウントされていない人物が対象
             if len(person.trajectory) >= 2 and not getattr(person, "counted", False):
-                direction = check_line_crossing(person, center_line_x)
+                direction = check_line_crossing(person, center_line_x,frame_copy)
                 if direction:
                     counter.update(direction)
+                    person.counted = True
                     print(f"Person ID {person.id} crossed line: {direction}")
 
         # 古いトラッキング対象を削除 (last_seen が TRACKING_TIMEOUT を超えたもの)
