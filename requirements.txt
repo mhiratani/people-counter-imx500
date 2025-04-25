@@ -7,4 +7,4 @@ opencv-python
 load_dotenv
 boto3
 # webrtc
-subprocess
+# subprocess  Pythonの標準ライブラリの一部なので、pip install不要
