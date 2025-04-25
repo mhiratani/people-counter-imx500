@@ -44,7 +44,7 @@ config = load_config('config.json')
 camera_name = load_config('camera_name.json')
 
 # 人流カウント設定
-PERSON_CLASS_ID = config.get('DETECTION_THRESHOLD', 0)
+PERSON_CLASS_ID = config.get('PERSON_CLASS_ID', 0)
 # 人物クラスのID（通常COCOデータセットでは0）
 
 MAX_TRACKING_DISTANCE = config.get('MAX_TRACKING_DISTANCE', 60)
