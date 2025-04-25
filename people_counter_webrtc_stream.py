@@ -102,7 +102,6 @@ LOG_INTERVAL = 5  # ログ出力間隔（秒）
 
 # グローバル変数
 last_log_time = 0
-latest_frame = None
 
 def init_process_frame_callback():
     # コールバック関数の属性を初期化
@@ -498,7 +497,7 @@ def save_image_at_startup(frame, center_line_x):
 
 def process_frame_callback(request):
     """フレームごとの処理を行うコールバック関数"""
-    global active_people, counter, last_log_time, latest_frame
+    global active_people, counter, last_log_time
 
     # 関数の属性が初期化されていない場合は初期化
     if not hasattr(process_frame_callback, 'image_saved'):
@@ -610,7 +609,8 @@ def process_frame_callback(request):
         except Exception as e:
             print(f"RTSP配信エラー: {e}")
 
-        latest_frame = frame.copy()
+        cv2.imwrite("debug.jpg", frame)
+        print("frame.shape", frame.shape, "frame.dtype", frame.dtype)
 
     except Exception as e:
         print(f"コールバックエラー: {e}")
