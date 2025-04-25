@@ -603,9 +603,10 @@ def process_frame_callback(request):
         counter.save_to_json()
 
         try:
-            # 必ずBGR formatでかつFRMEサイズに合わせること（多くの場合 [H, W, 3]）
+            # frame(BGRA) → BGR(3ch)変換
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
             if ffmpeg_proc and ffmpeg_proc.stdin:
-                ffmpeg_proc.stdin.write(frame.astype(np.uint8).tobytes())
+                ffmpeg_proc.stdin.write(frame_bgr.astype(np.uint8).tobytes())
         except Exception as e:
             print(f"RTSP配信エラー: {e}")
 
