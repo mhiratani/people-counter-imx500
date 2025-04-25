@@ -6,3 +6,6 @@ opencv-python
 # for uploading to S3
 load_dotenv
 boto3
+# webrtc
+aiortc[av]
+av
