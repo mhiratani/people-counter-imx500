@@ -28,7 +28,7 @@ config = load_config('config.json')
 camera_name_dict = load_config('camera_name.json')
 CAMERA_NAME = camera_name_dict.get('CAMERA_NAME', 'cameraA')
 
-WEBSOCKET_URL = config.get("websocket_url", None)
+WEBSOCKET_URL = config.get("WEBSOCKET_URL", None)
 
 # 人流カウント設定
 PERSON_CLASS_ID = 0
