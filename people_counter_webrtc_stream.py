@@ -16,7 +16,7 @@ from picamera2.devices.imx500.postprocess import scale_boxes
 # 画像保存用
 import cv2
 
-# 常に最新の描画済みフレームだけ aiortc で WebRTC 配信用
+# ffmpegによるRTSP配信プロセス用
 import subprocess
 
 # 描画設定
@@ -44,7 +44,7 @@ config = load_config('config.json')
 camera_name = load_config('camera_name.json')
 
 # 人流カウント設定
-PERSON_CLASS_ID = config.get('PERSON_CLASS_ID', 0)
+PERSON_CLASS_ID = 0
 # 人物クラスのID（通常COCOデータセットでは0）
 
 MAX_TRACKING_DISTANCE = config.get('MAX_TRACKING_DISTANCE', 60)
