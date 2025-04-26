@@ -105,6 +105,7 @@ async def websocket_manager():
             try:
                 # 非同期接続
                 ws_connection = await connect(WEBSOCKET_URL, open_timeout=1)
+                ws_ready_event.set()
                 print("WebSocket接続成功")
                 # connection_ready.set() # 接続準備完了を通知 (任意)
             except Exception as e:
@@ -140,35 +141,34 @@ async def threadsafe_queue_bridge():
 
 async def sender_task(queue: asyncio.Queue):
     """キューからデータを取り出し、WebSocketで送信するタスク"""
-    print("データ送信タスクを開始")
-    print("get queue(whileの外):", id(queue), "qsize:", queue.qsize())
-    while True:
-        print("キューからget前, キュー長さ:", queue.qsize())
-        print("get queue(whileの中):", id(queue), "qsize:", queue.qsize())
-
-        # キューからデータを取り出す (データが入るまで待機)
-        packet = await queue.get()
-        print(f"送信したいデータ：{packet} (キュー長:{queue.qsize()})")
-
-        print(f"送信したいデータ：{packet}")
-        # WebSocket接続が確立されているか確認
-        if ws_connection and not ws_connection.closed:
-            try:
-                msg = json.dumps(packet)
-                # 非同期送信
-                await ws_connection.send(msg)
-                print(f"WebSocket送信成功: {msg[:100]}...") # 送信確認ログ (量が多いと邪魔かも)
-            except Exception as e:
-                print(f"WebSocket送信エラー: {e}")
-                # 送信に失敗した場合は、データを再キューイングするか破棄するか決める
-                # 今回はシンプルに破棄します（キュー溢れリスクを避けるため）
-                await queue.put(packet) # 再キューイングする場合
-        else:
-            # 接続がない場合はデータを破棄 (または再キューイング)
-            print("WebSocketが未接続または閉じられているためデータを破棄")
-            pass # ログは量が多いと邪魔なのでコメントアウト
-
-        # queue.task_done() # get()したアイテムの処理が完了したことを通知 (join用, 今回は必須ではない)
+    # print("データ送信タスクを開始")
+    try:
+        while True:
+            # print("キューからget前, キュー長さ:", queue.qsize())
+            # キューからデータを取り出す (データが入るまで待機)
+            packet = await queue.get()
+            # print(f"送信したいデータ：{packet} (キュー長:{queue.qsize()})")
+            # WebSocket接続が確立されているか確認
+            if ws_connection and getattr(ws_connection, "open", False):
+                try:
+                    msg = json.dumps(packet)
+                    # 非同期送信
+                    await ws_connection.send(msg)
+                    # print(f"WebSocket送信成功: {msg[:100]}...") # 送信確認ログ (量が多いと邪魔かも)
+                except Exception as e:
+                    # print(f"WebSocket送信エラー: {e}")
+                    # 送信に失敗した場合は、データを再キューイングするか破棄するか決める
+                    # 今回はシンプルに破棄します（キュー溢れリスクを避けるため）
+                    await queue.put(packet) # 再キューイングする場合
+            else:
+                # 接続がない場合はデータを破棄 (または再キューイング)
+                print("WebSocketが未接続または閉じられているためデータを破棄")
+                pass # ログは量が多いと邪魔なのでコメントアウト
+    except asyncio.CancelledError:
+        print("ルートのtry except: asyncio.CancelledError受信（キャンセル要求で中断しました）")
+        raise
+    except Exception as e:
+        print("ルートのtry except: その他例外", e)
 
 def parse_detections(metadata: dict):
     """
@@ -335,6 +335,11 @@ async def main():
         # WebSocket接続管理タスクを開始
         ws_manager_task = asyncio.create_task(websocket_manager())
 
+        # データ送信タスク開始を抑制（WebSocket準備まで待つ）
+        print("WebSocketの接続完了を待っています...")
+        await ws_ready_event.wait()
+        print("WebSocket接続完了！データ送信タスクを開始します。")
+
         # データ送信タスクを開始 (キューを渡す)
         bridge_task = asyncio.create_task(threadsafe_queue_bridge())
         sender_task_obj = asyncio.create_task(sender_task(data_queue_asyncio))
@@ -414,6 +419,7 @@ async def main():
 if __name__ == "__main__":
     # asyncioアプリケーションとして実行
     try:
+        ws_ready_event = asyncio.Event()
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Ctrl+Cを受信しました。終了処理中...")
