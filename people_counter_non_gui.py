@@ -467,7 +467,7 @@ def save_debug_image(frame, person, center_line_x, direction):
 
         # タイムスタンプ付きのファイル名で保存
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        filename = os.path.join(DEBUG_IMAGES_DIR, f"{OUTPUT_PREFIX}_{timestamp}_crossing_{person.id}_{direction}.jpg")
+        filename = os.path.join(DEBUG_IMAGES_DIR, f"{counter.output_prefix}_{timestamp}_crossing_{person.id}_{direction}.jpg")
         cv2.imwrite(filename, debug_frame)
         print(f"デバッグ画像を保存しました: {filename}")
     except Exception as e:
@@ -490,7 +490,7 @@ def save_image_at_startup(frame, center_line_x):
         cv2.putText(debug_frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
         # タイムスタンプ付きのファイル名で保存
-        filename = os.path.join(OUTPUT_DIR, f"{OUTPUT_PREFIX}_{timestamp}_startupimage.jpg")
+        filename = os.path.join(OUTPUT_DIR, f"{counter.output_dir}_{timestamp}_startupimage.jpg")
         cv2.imwrite(filename, debug_frame)
         print(f"起動時に画像を保存しました: {filename}")
     except Exception as e:

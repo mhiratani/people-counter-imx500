@@ -483,7 +483,7 @@ def save_debug_image(frame, person, center_line_x, direction):
 
         # タイムスタンプ付きのファイル名で保存
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        filename = os.path.join(DEBUG_IMAGES_DIR, f"{OUTPUT_PREFIX}_{timestamp}_crossing_{person.id}_{direction}.jpg")
+        filename = os.path.join(DEBUG_IMAGES_DIR, f"{counter.output_prefix}_{timestamp}_crossing_{person.id}_{direction}.jpg")
         cv2.imwrite(filename, debug_frame)
         print(f"デバッグ画像を保存しました: {filename}")
     except Exception as e:
@@ -506,11 +506,47 @@ def save_image_at_startup(frame, center_line_x):
         cv2.putText(debug_frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
         # タイムスタンプ付きのファイル名で保存
-        filename = os.path.join(OUTPUT_DIR, f"{OUTPUT_PREFIX}_{timestamp}_startupimage.jpg")
+        filename = os.path.join(OUTPUT_DIR, f"{counter.output_dir}_{timestamp}_startupimage.jpg")
         cv2.imwrite(filename, debug_frame)
         print(f"起動時に画像を保存しました: {filename}")
     except Exception as e:
         print(f"起動時に画像を保存する関数の実行エラー: {e}")
+
+def render_frame(frame, center_line_x, frame_height):
+    """ RTSP配信用の描画関連処理 (毎フレーム、frameに対して直接描画) """
+    cv2.line(frame, (center_line_x, 0), (center_line_x, frame_height), LINE_COLOR, THICKNESS)
+
+    # 人物ごとにバウンディングボックス、軌跡、IDを描画
+    for person in active_people:
+        # バウンディングボックス
+        x, y, w, h = map(int, person.box)
+        cv2.rectangle(frame, (x, y), (x + w, y + h), BOX_COLOR, THICKNESS)
+
+        # 軌跡
+        for i in range(1, len(person.trajectory)):
+            pt1 = tuple(map(int, person.trajectory[i-1]))
+            pt2 = tuple(map(int, person.trajectory[i]))
+            cv2.line(frame, pt1, pt2, TRAJECTORY_COLOR, THICKNESS)
+
+        # ID
+        text = f"ID: {person.id}"
+        text_pos = (x, y - 5) if y > 15 else (x, y + h + 15)
+        cv2.putText(frame, text, text_pos, FONT, int(FONT_SCALE * 0.6), TEXT_COLOR, THICKNESS)
+
+    # ステータス情報
+    status_text = f"Active: {len(active_people)} | Period (R->L: {counter.right_to_left}, L->R: {counter.left_to_right})"
+    cv2.putText(frame, status_text, (10, 30), FONT, FONT_SCALE, TEXT_COLOR, THICKNESS)
+    total_counts = counter.get_total_counts()
+    total_text = f"Total (R->L: {total_counts['right_to_left']}, L->R: {total_counts['left_to_right']})"
+    cv2.putText(frame, total_text, (10, 65), FONT, FONT_SCALE, TEXT_COLOR, THICKNESS)
+
+    try:
+        # frame(BGRA) → BGR(3ch)変換
+        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+        if ffmpeg_proc and ffmpeg_proc.stdin:
+            ffmpeg_proc.stdin.write(frame_bgr.astype(np.uint8).tobytes())
+    except Exception as e:
+        print(f"RTSP配信エラー: {e}")
 
 def process_frame_callback(request):
     """フレームごとの処理を行うコールバック関数"""
@@ -542,35 +578,6 @@ def process_frame_callback(request):
             frame_height, frame_width = m.array.shape[:2]
             center_line_x = frame_width // 2
 
-            # --- 描画処理 (毎フレーム、frameに対して直接描画) ---
-            frame = m.array
-            cv2.line(frame, (center_line_x, 0), (center_line_x, frame_height), LINE_COLOR, THICKNESS)
-
-            # 人物ごとにバウンディングボックス、軌跡、IDを描画
-            for person in active_people:
-                # バウンディングボックス
-                x, y, w, h = map(int, person.box)
-                cv2.rectangle(frame, (x, y), (x + w, y + h), BOX_COLOR, THICKNESS)
-
-                # 軌跡
-                for i in range(1, len(person.trajectory)):
-                    pt1 = tuple(map(int, person.trajectory[i-1]))
-                    pt2 = tuple(map(int, person.trajectory[i]))
-                    cv2.line(frame, pt1, pt2, TRAJECTORY_COLOR, THICKNESS)
-
-                # ID
-                text = f"ID: {person.id}"
-                text_pos = (x, y - 5) if y > 15 else (x, y + h + 15)
-                cv2.putText(frame, text, text_pos, FONT, int(FONT_SCALE * 0.6), TEXT_COLOR, THICKNESS)
-
-            # ステータス情報
-            status_text = f"Active: {len(active_people)} | Period (R->L: {counter.right_to_left}, L->R: {counter.left_to_right})"
-            cv2.putText(frame, status_text, (10, 30), FONT, FONT_SCALE, TEXT_COLOR, THICKNESS)
-            total_counts = counter.get_total_counts()
-            total_text = f"Total (R->L: {total_counts['right_to_left']}, L->R: {total_counts['left_to_right']})"
-            cv2.putText(frame, total_text, (10, 65), FONT, FONT_SCALE, TEXT_COLOR, THICKNESS)
-            # --- 描画ここまで ---
-
             # 起動時の画像を一度だけ保存
             if not process_frame_callback.image_saved:
                 save_image_at_startup(m.array, center_line_x)
@@ -582,11 +589,14 @@ def process_frame_callback(request):
             if DEBUG_MODE:
                 frame_copy = m.array.copy()
 
+            # RTSP配信向け描画処理
+            render_frame(m.array, center_line_x, frame_height)
+
         # ラインを横切った人をカウント
         for person in active_people:
             # 少なくとも2フレーム以上の軌跡がある、かつ、まだカウントされていない人物が対象
             if len(person.trajectory) >= 2 and not person.counted:
-                direction = check_line_crossing(person, center_line_x,frame_copy)
+                direction = check_line_crossing(person, center_line_x, frame_copy)
                 if direction:
                     counter.update(direction)
                     person.counted = True
@@ -613,14 +623,6 @@ def process_frame_callback(request):
 
         # 指定間隔ごとにJSONファイルに保存
         counter.save_to_json()
-
-        try:
-            # frame(BGRA) → BGR(3ch)変換
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-            if ffmpeg_proc and ffmpeg_proc.stdin:
-                ffmpeg_proc.stdin.write(frame_bgr.astype(np.uint8).tobytes())
-        except Exception as e:
-            print(f"RTSP配信エラー: {e}")
 
     except Exception as e:
         print(f"コールバックエラー: {e}")
