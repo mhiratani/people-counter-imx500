@@ -88,7 +88,7 @@ class Detection:
         try:
             self.box = imx500.convert_inference_coords(coords, metadata, picam2) # [x, y, w, h] 形式
         except NameError:
-             print("Warning: imx500 or picam2 not initialized when creating Detection", file=sys.stderr)
+             print("Warning: imx500 or picam2 not initialized when creating Detection")
              self.box = coords # fallback
 
 # ====== 非同期タスク ======
@@ -108,7 +108,9 @@ async def websocket_manager():
                 print("WebSocket接続成功")
                 # connection_ready.set() # 接続準備完了を通知 (任意)
             except Exception as e:
-                print(f"WebSocket接続失敗: {e}. {reconnect_delay}秒後に再試行...", file=sys.stderr)
+                import traceback
+                print(f"WebSocket接続失敗: {e}. {reconnect_delay}秒後に再試行...")
+                traceback.print_exc()
                 ws_connection = None # 接続失敗時は None に戻す
                 # connection_ready.clear() # 接続が利用不可になったことを通知 (任意)
                 await asyncio.sleep(reconnect_delay)
@@ -123,7 +125,7 @@ async def websocket_manager():
                 ws_connection = None
                 # connection_ready.clear()
             except Exception as e:
-                print(f"WebSocketエラー: {e}. 接続管理を再開します。", file=sys.stderr)
+                print(f"WebSocketエラー: {e}. 接続管理を再開します。")
                 ws_connection = None
                 # connection_ready.clear()
             await asyncio.sleep(1)
@@ -134,7 +136,7 @@ async def threadsafe_queue_bridge():
         try:
             await data_queue_asyncio.put(packet)
         except asyncio.QueueFull:
-            print("asyncioキューが満杯。破棄", file=sys.stderr)
+            print("asyncioキューが満杯。破棄")
 
 async def sender_task(queue: asyncio.Queue):
     """キューからデータを取り出し、WebSocketで送信するタスク"""
@@ -157,7 +159,7 @@ async def sender_task(queue: asyncio.Queue):
                 await ws_connection.send(msg)
                 print(f"WebSocket送信成功: {msg[:100]}...") # 送信確認ログ (量が多いと邪魔かも)
             except Exception as e:
-                print(f"WebSocket送信エラー: {e}", file=sys.stderr)
+                print(f"WebSocket送信エラー: {e}")
                 # 送信に失敗した場合は、データを再キューイングするか破棄するか決める
                 # 今回はシンプルに破棄します（キュー溢れリスクを避けるため）
                 await queue.put(packet) # 再キューイングする場合
@@ -248,7 +250,7 @@ def process_frame_callback(request):
                  frame_height, frame_width = m.array.shape[:2]
                  center_line_x = frame_width // 2
         except Exception as map_e:
-             print(f"MappedArrayエラー: {map_e}", file=sys.stderr)
+             print(f"MappedArrayエラー: {map_e}")
              frame_width, frame_height = 0, 0 # fallback
              center_line_x = 0
 
@@ -273,10 +275,10 @@ def process_frame_callback(request):
         try:
             data_queue_threadsafe.put_nowait(packet)
         except queue.Full:
-            print("データカメラキューが満杯なので破棄", file=sys.stderr)
+            print("データカメラキューが満杯なので破棄")
 
     except Exception as e:
-        print(f"コールバック処理エラー: {e}", file=sys.stderr)
+        print(f"コールバック処理エラー: {e}")
         import traceback
         traceback.print_exc()
 
@@ -295,7 +297,7 @@ async def main():
             intrinsics = NetworkIntrinsics()
             intrinsics.task = "object detection"
         elif intrinsics.task != "object detection":
-            print("ネットワークはオブジェクト検出タスクではありません", file=sys.stderr)
+            print("ネットワークはオブジェクト検出タスクではありません")
             sys.exit(1)
 
         # デフォルトラベル
@@ -306,7 +308,7 @@ async def main():
                 with open(label_path, "r") as f:
                     intrinsics.labels = f.read().splitlines()
             except FileNotFoundError:
-                print("assets/coco_labels.txt が見つかりません。デフォルトのCOCOラベルを使用します。", file=sys.stderr)
+                print("assets/coco_labels.txt が見つかりません。デフォルトのCOCOラベルを使用します。")
                 # COCOデータセットの一般的なラベルの一部
                 intrinsics.labels = ["person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat"]
         intrinsics.update_with_defaults()
@@ -361,7 +363,7 @@ async def main():
 
 
     except Exception as e:
-        print(f"初期化エラーまたはメイン処理エラー: {e}", file=sys.stderr)
+        print(f"初期化エラーまたはメイン処理エラー: {e}")
         import traceback
         traceback.print_exc()
     finally:
@@ -390,7 +392,7 @@ async def main():
                 await ws_connection.close()
                 print("WebSocketを閉じました")
             except Exception as e:
-                 print(f"WebSocketクローズエラー: {e}", file=sys.stderr)
+                 print(f"WebSocketクローズエラー: {e}")
 
 
         # カメラとIMX500モジュールを閉じる (元のコードと同じ)
@@ -403,7 +405,7 @@ async def main():
                 imx500.close() # AIモジュールを閉じる
                 print("IMX500モジュールを閉じました")
         except Exception as e:
-            print(f"カメラ/IMX500クローズエラー: {e}", file=sys.stderr)
+            print(f"カメラ/IMX500クローズエラー: {e}")
 
         print("プログラムを終了します")
 
