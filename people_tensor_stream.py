@@ -154,11 +154,6 @@ async def sender_task(queue: asyncio.Queue):
 
         print(f"送信したいデータ：{packet}")
         # WebSocket接続が確立されているか確認
-        print("ws_connection:", ws_connection)
-        print("type(ws_connection):", type(ws_connection))
-        print("hasattr(ws_connection, 'closed'):", hasattr(ws_connection, "closed"))
-        if ws_connection:
-            print("ws_connection.closed:", ws_connection.closed)
         print('ws_connection is', ws_connection, 'closed:', getattr(ws_connection, "closed", "N/A"))
         if ws_connection and not ws_connection.closed:
             try:
