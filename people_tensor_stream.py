@@ -260,16 +260,12 @@ def process_frame_callback(request):
             "detections": json_serializable_detections
         }
 
-        # データを非同期キューに入れる
-        # キューが満杯の場合はエラーになる可能性があります (QueueFull)
-        # 非同期タスクがキューから取り出す速度が遅い場合に発生します。
-        # エラー処理として、ここでは警告を出力し、そのフレームのデータは破棄します。
         try:
-            data_queue.put_nowait(packet)
-            print("データをキューに追加") # キュー追加確認ログ (量が多いと邪魔)
-            print("put queue:", id(data_queue), "qsize:", data_queue.qsize())
-        except asyncio.QueueFull:
-            print("警告: データキューが満杯です。データをスキップします。", file=sys.stderr)
+            loop = asyncio.get_event_loop()
+            loop.call_soon_threadsafe(data_queue.put_nowait, packet)
+            print("データをキューに追加(スレッドセーフ)")
+        except Exception as e:
+            print(f"データキューにputできませんでした: {e}", file=sys.stderr)
 
     except Exception as e:
         print(f"コールバック処理エラー: {e}", file=sys.stderr)
