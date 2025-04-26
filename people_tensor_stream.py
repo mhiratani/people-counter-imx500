@@ -274,7 +274,7 @@ def process_frame_callback(request):
 
 async def main():
     """非同期アプリケーションのエントリーポイント"""
-    global imx500, picam2 # インスタンスをグローバルとしてアクセス可能にする（parse_detectionsのため）
+    global imx500, picam2, intrinsics # インスタンスをグローバルとしてアクセス可能にする（parse_detectionsのため）
 
     # IMX500の初期化 (元のコードと同じ)
     print("IMX500 AIカメラモジュールを初期化中...")
