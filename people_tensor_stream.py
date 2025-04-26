@@ -148,8 +148,9 @@ async def sender_task(queue: asyncio.Queue):
             # キューからデータを取り出す (データが入るまで待機)
             packet = await queue.get()
             # print(f"送信したいデータ：{packet} (キュー長:{queue.qsize()})")
-            # WebSocket接続が確立されているか確認
-            if ws_connection and getattr(ws_connection, "open", False):
+            # websockets v15（sync/async両系）以降は属性値でステータス判定しない
+            if ws_connection:
+                # send例外だけで可用性担保する
                 try:
                     msg = json.dumps(packet)
                     # 非同期送信
