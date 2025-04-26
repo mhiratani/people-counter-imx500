@@ -135,6 +135,8 @@ async def threadsafe_queue_bridge():
         packet = await asyncio.to_thread(data_queue_threadsafe.get)
         try:
             await data_queue_asyncio.put(packet)
+            print("data_queue_asyncio.put")
+            print(f"packet:{packet}")
         except asyncio.QueueFull:
             print("asyncioキューが満杯。破棄")
 
@@ -152,6 +154,7 @@ async def sender_task(queue: asyncio.Queue):
 
         print(f"送信したいデータ：{packet}")
         # WebSocket接続が確立されているか確認
+        print('ws_connection is', ws_connection, 'closed:', getattr(ws_connection, "closed", "N/A"))
         if ws_connection and not ws_connection.closed:
             try:
                 msg = json.dumps(packet)
