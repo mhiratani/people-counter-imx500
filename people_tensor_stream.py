@@ -306,9 +306,8 @@ async def main():
         picam2 = Picamera2(imx500.camera_num)
         # ヘッドレス環境用の設定
         # Picamera2の設定部分は、コールバックが呼ばれるように適切に行う
-        # ここでは元のコードの設定例をそのまま利用
-        main_config = {'size': (intrinsics.width, intrinsics.height), 'format': 'XRGB8888'} # 推論サイズに合わせる
-        # main_config = {'format': 'XRGB8888'}
+        # main_config = {'size': (intrinsics.width, intrinsics.height), 'format': 'XRGB8888'} # 推論サイズに合わせる
+        main_config = {'format': 'XRGB8888'}
         config = picam2.create_preview_configuration(main_config, controls={"FrameRate": intrinsics.inference_rate}, buffer_count=6)
 
         imx500.show_network_fw_progress_bar()
