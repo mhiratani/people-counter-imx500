@@ -65,7 +65,7 @@ MAX_DETECTIONS = config.get('MAX_DETECTIONS', 30)
 
 # WebSocket送信用のキューと接続オブジェクト
 # キューの最大サイズを設定してメモリ溢れを防ぐ (例: 10フレーム分のデータ)
-data_queue = asyncio.Queue(maxsize=20)
+data_queue = asyncio.Queue(maxsize=60)
 # WebSocket接続オブジェクトを共有するための変数
 # これを sender_task が参照します
 ws_connection = None
@@ -132,22 +132,22 @@ async def sender_task(queue: asyncio.Queue):
     while True:
         # キューからデータを取り出す (データが入るまで待機)
         packet = await queue.get()
-
+        print(f"送信したいデータ：{packet}")
         # WebSocket接続が確立されているか確認
         if ws_connection and not ws_connection.closed:
             try:
                 msg = json.dumps(packet)
                 # 非同期送信
                 await ws_connection.send(msg)
-                # print(f"WebSocket送信成功: {msg[:100]}...") # 送信確認ログ (量が多いと邪魔かも)
+                print(f"WebSocket送信成功: {msg[:100]}...") # 送信確認ログ (量が多いと邪魔かも)
             except Exception as e:
                 print(f"WebSocket送信エラー: {e}", file=sys.stderr)
                 # 送信に失敗した場合は、データを再キューイングするか破棄するか決める
                 # 今回はシンプルに破棄します（キュー溢れリスクを避けるため）
-                # await queue.put(packet) # 再キューイングする場合
+                await queue.put(packet) # 再キューイングする場合
         else:
             # 接続がない場合はデータを破棄 (または再キューイング)
-            # print("WebSocketが未接続または閉じられているためデータを破棄")
+            print("WebSocketが未接続または閉じられているためデータを破棄")
             pass # ログは量が多いと邪魔なのでコメントアウト
 
         # queue.task_done() # get()したアイテムの処理が完了したことを通知 (join用, 今回は必須ではない)
