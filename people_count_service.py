@@ -6,6 +6,7 @@ import numpy as np
 import asyncio
 import websockets
 from scipy.optimize import linear_sum_assignment
+import traceback
 
 class Person:
     next_id = 0
@@ -371,82 +372,133 @@ class PeopleTracker:
 
     async def detect_server(self, websocket, path):
         """WebSocketサーバー: クライアントからのメッセージを受信してキューに追加"""
+        client_id = id(websocket)
+        print(f"[WS] 新しい接続が確立されました。クライアントID: {client_id}, パス: {path}")
         try:
             async for message in websocket:
+                print(f"[WS] クライアント{client_id}からメッセージを受信。サイズ: {len(message)}バイト")
+                print(f"[WS] メッセージプレビュー: {message[:100]}..." if len(message) > 100 else f"[WS] メッセージ: {message}")
                 await self.tensor_queue.put(message)
-        except websockets.exceptions.ConnectionClosed:
-            print("Connection closed")
+                print(f"[WS] メッセージをキューに追加しました。現在のキューサイズ: {self.tensor_queue.qsize()}")
+        except websockets.exceptions.ConnectionClosed as e:
+            print(f"[WS] クライアント{client_id}との接続が閉じられました。コード: {e.code}, 理由: {e.reason}")
         except Exception as e:
-            print(f"Error in detect_server: {e}")
+            print(f"[WS] クライアント{client_id}との通信中にエラーが発生: {e}")
+            print(f"[WS] エラー詳細: {traceback.format_exc()}")
+        finally:
+            print(f"[WS] クライアント{client_id}との接続が終了しました")
 
     async def tensor_worker(self):
         """キューからメッセージを取り出して処理"""
+        print("[Worker] テンソルワーカーが開始されました")
         while True:
             try:
                 # キューからメッセージを取得
+                print(f"[Worker] メッセージ待機中。キューサイズ: {self.tensor_queue.qsize()}")
                 msg = await self.tensor_queue.get()
+                print(f"[Worker] キューからメッセージを取得。サイズ: {len(msg)}バイト")
                 
                 # JSONパース
                 try:
+                    start_time = time.time()
                     packet = json.loads(msg)
+                    parse_time = time.time() - start_time
+                    print(f"[Worker] JSONの解析に成功しました（{parse_time:.4f}秒）。キー: {list(packet.keys())}")
                 except json.JSONDecodeError as e:
-                    print(f"Failed to parse JSON: {e}")
+                    print(f"[Worker] JSONの解析に失敗: {e}")
+                    print(f"[Worker] メッセージプレビュー: {msg[:100]}...")
                     continue
                 
                 # データ抽出
                 center_line_x = packet.get("center_line_x")
                 detections = packet.get("detections", [])
                 
+                print(f"[Worker] 抽出データ - center_line_x: {center_line_x}, 検出数: {len(detections)}")
+                if detections:
+                    print(f"[Worker] 最初の検出サンプル: {detections[0]}")
+                
                 if center_line_x is None:
-                    print("Warning: center_line_x not found in packet")
+                    print("[Worker] 警告: パケット内にcenter_line_xが見つかりません")
                     continue
                 
                 # 人物追跡を更新
+                previous_count = len(self.active_people)
+                start_time = time.time()
                 self.active_people = self.track_people(detections, self.active_people)
+                track_time = time.time() - start_time
+                
+                print(f"[Worker] 人物追跡を更新しました（{track_time:.4f}秒）。更新前: {previous_count}, 更新後: {len(self.active_people)}")
+                print(f"[Worker] アクティブな人物ID: {[p.id for p in self.active_people]}")
                 
                 # ラインを横切った人をカウント
+                cross_count = 0
                 for person in self.active_people:
                     if len(person.trajectory) >= 2 and not person.counted:
                         direction = self.check_line_crossing(person, center_line_x)
                         if direction:
                             self.counter.update(direction)
-                            print(f"Person ID {person.id} crossed line: {direction}")
+                            cross_count += 1
+                            print(f"[Worker] 人物ID {person.id} がラインを横断: {direction}")
+                            print(f"[Worker] 軌跡: {person.trajectory[-2:]} (最後の2点を表示)")
+                
+                if cross_count == 0:
+                    print("[Worker] このフレームではライン横断は検出されませんでした")
                 
                 # 古いトラッキング対象を削除
                 current_time = time.time()
+                before_cleanup = len(self.active_people)
                 self.active_people = [p for p in self.active_people 
-                                     if current_time - p.last_seen < self.tracking_timeout]
+                                    if current_time - p.last_seen < self.tracking_timeout]
+                
+                if before_cleanup != len(self.active_people):
+                    print(f"[Worker] 追跡オブジェクトをクリーンアップしました。削除数: {before_cleanup - len(self.active_people)}")
+                    print(f"[Worker] 残りのID: {[p.id for p in self.active_people]}")
                 
                 # ステータス表示
                 self.print_status()
                 
                 # データ保存
+                save_start = time.time()
                 self.counter.save_to_json()
+                save_time = time.time() - save_start
+                print(f"[Worker] データをJSONに保存しました（{save_time:.4f}秒）")
+                
+                # 処理完了
+                print(f"[Worker] フレーム処理が完了しました。合計カウント - 入場: {self.counter.in_count}, 退場: {self.counter.out_count}")
+                print("-" * 50)
                 
             except Exception as e:
-                print(f"Error in tensor_worker: {e}")
+                print(f"[Worker] tensor_workerでエラーが発生: {e}")
+                print(f"[Worker] エラー詳細: {traceback.format_exc()}")
 
     async def run(self):
         """サーバーを起動してワーカーを実行"""
+        print(f"[Server] WebSocketサーバーを0.0.0.0:8765で起動します")
         start_server = websockets.serve(self.detect_server, "0.0.0.0", 8765)
+        print(f"[Server] WebSocketサーバーが初期化されました")
         
         # サーバーとワーカーを実行
+        print(f"[Server] サーバーとワーカータスクを開始します")
         await asyncio.gather(
             start_server,
             self.tensor_worker()
         )
 
-
 def main():
     """メイン関数"""
+    print("[Main] PeopleTrackerを初期化します")
     tracker = PeopleTracker()
     
     try:
+        print("[Main] asyncioイベントループを開始します")
         asyncio.run(tracker.run())
     except KeyboardInterrupt:
-        print("Server stopped by user")
+        print("[Main] ユーザーによってサーバーが停止されました")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"[Main] エラー: {e}")
+        print(f"[Main] エラー詳細: {traceback.format_exc()}")
+    finally:
+        print("[Main] サーバーのシャットダウンが完了しました")
 
 
 if __name__ == "__main__":
