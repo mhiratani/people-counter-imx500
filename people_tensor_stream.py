@@ -65,7 +65,7 @@ MAX_DETECTIONS = config.get('MAX_DETECTIONS', 30)
 
 # WebSocket送信用のキューと接続オブジェクト
 # キューの最大サイズを設定してメモリ溢れを防ぐ (例: 10フレーム分のデータ)
-data_queue = asyncio.Queue(maxsize=60)
+data_queue = asyncio.Queue(maxsize=100)
 # WebSocket接続オブジェクトを共有するための変数
 # これを sender_task が参照します
 ws_connection = None
@@ -130,8 +130,13 @@ async def sender_task(queue: asyncio.Queue):
     """キューからデータを取り出し、WebSocketで送信するタスク"""
     print("データ送信タスクを開始")
     while True:
+        print("キューからget前, キュー長さ:", queue.qsize())
+
         # キューからデータを取り出す (データが入るまで待機)
         packet = await queue.get()
+
+        print(f"送信したいデータ：{packet} (キュー長:{queue.qsize()})")
+
         print(f"送信したいデータ：{packet}")
         # WebSocket接続が確立されているか確認
         if ws_connection and not ws_connection.closed:
@@ -151,7 +156,6 @@ async def sender_task(queue: asyncio.Queue):
             pass # ログは量が多いと邪魔なのでコメントアウト
 
         # queue.task_done() # get()したアイテムの処理が完了したことを通知 (join用, 今回は必須ではない)
-
 
 def parse_detections(metadata: dict):
     """
@@ -261,7 +265,7 @@ def process_frame_callback(request):
         # エラー処理として、ここでは警告を出力し、そのフレームのデータは破棄します。
         try:
             data_queue.put_nowait(packet)
-            # print("データをキューに追加") # キュー追加確認ログ (量が多いと邪魔)
+            print("データをキューに追加") # キュー追加確認ログ (量が多いと邪魔)
         except asyncio.QueueFull:
             print("警告: データキューが満杯です。データをスキップします。", file=sys.stderr)
 
