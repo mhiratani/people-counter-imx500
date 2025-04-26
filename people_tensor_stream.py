@@ -129,12 +129,13 @@ async def websocket_manager():
 async def sender_task(queue: asyncio.Queue):
     """キューからデータを取り出し、WebSocketで送信するタスク"""
     print("データ送信タスクを開始")
+    print("get queue(whileの外):", id(queue), "qsize:", queue.qsize())
     while True:
         print("キューからget前, キュー長さ:", queue.qsize())
+        print("get queue(whileの中):", id(queue), "qsize:", queue.qsize())
 
         # キューからデータを取り出す (データが入るまで待機)
         packet = await queue.get()
-
         print(f"送信したいデータ：{packet} (キュー長:{queue.qsize()})")
 
         print(f"送信したいデータ：{packet}")
@@ -266,6 +267,7 @@ def process_frame_callback(request):
         try:
             data_queue.put_nowait(packet)
             print("データをキューに追加") # キュー追加確認ログ (量が多いと邪魔)
+            print("put queue:", id(data_queue), "qsize:", data_queue.qsize())
         except asyncio.QueueFull:
             print("警告: データキューが満杯です。データをスキップします。", file=sys.stderr)
 
