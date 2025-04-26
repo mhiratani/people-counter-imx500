@@ -8,7 +8,7 @@ from websockets.asyncio.server import serve
 import websockets
 from scipy.optimize import linear_sum_assignment
 import traceback
-
+import matplotlib.pyplot as plt
 class Person:
     next_id = 0
 
@@ -24,8 +24,11 @@ class Person:
 
     def get_center(self):
         """バウンディングボックスの中心座標を取得"""
+        if len(self.box) != 4:
+            print(f"[ERROR] get_center: boxの要素数が4ではありません: {self.box}")
+            raise ValueError("Box の要素数が4つでありません")
         x, y, w, h = self.box
-        return (x + w//2, y + h//2)
+        return [(x + w)/2, (y + h)/2]
 
     def update(self, box):
         """新しい検出結果で人物の情報を更新"""
@@ -226,13 +229,21 @@ class PeopleTracker:
 
         return iou
 
-
     def track_people(self, detections, active_people):
         """
         物体検出で得られた人物候補（detections）と、既存の追跡対象（active_people）を
         効率的かつ精度良くマッチングし、追跡リストを更新します。
         ※ IOUと距離、ハンガリアンアルゴリズムを使用
         """
+        # ここで「detectionがdictなら必ず['box']を取り出す」ことで以降処理を一本化
+        clean_detections = []
+        for d in detections:
+            if isinstance(d, dict):
+                clean_detections.append(d['box'])
+            else:
+                clean_detections.append(d)
+
+        detections = clean_detections
         num_people = len(active_people)
         num_detections = len(detections)
 
@@ -374,13 +385,12 @@ class PeopleTracker:
     async def detect_server(self, websocket):
         """WebSocketサーバー: クライアントからのメッセージを受信してキューに追加"""
         client_id = id(websocket)
-        print(f"[WS] 新しい接続が確立されました。クライアントID: {client_id}")
+        # print(f"[WS] 新しい接続が確立されました。クライアントID: {client_id}")
         try:
             async for message in websocket:
-                print(f"[WS] クライアント{client_id}からメッセージを受信。サイズ: {len(message)}バイト")
-                print(f"[WS] メッセージプレビュー: {message[:100]}..." if len(message) > 100 else f"[WS] メッセージ: {message}")
+                # print(f"[WS] クライアント{client_id}からメッセージを受信。サイズ: {len(message)}バイト")
+                # print(f"[WS] メッセージプレビュー: {message[:100]}..." if len(message) > 100 else f"[WS] メッセージ: {message}")
                 await self.tensor_queue.put(message)
-                print(f"[WS] メッセージをキューに追加しました。現在のキューサイズ: {self.tensor_queue.qsize()}")
         except websockets.ConnectionClosed as e:
             print(f"[WS] クライアント{client_id}との接続が閉じられました。コード: {e.code}, 理由: {e.reason}")
         except Exception as e:
@@ -395,16 +405,16 @@ class PeopleTracker:
         while True:
             try:
                 # キューからメッセージを取得
-                print(f"[Worker] メッセージ待機中。キューサイズ: {self.tensor_queue.qsize()}")
+                # print(f"[Worker] メッセージ待機中。キューサイズ: {self.tensor_queue.qsize()}")
                 msg = await self.tensor_queue.get()
-                print(f"[Worker] キューからメッセージを取得。サイズ: {len(msg)}バイト")
+                # print(f"[Worker] キューからメッセージを取得。サイズ: {len(msg)}バイト")
                 
                 # JSONパース
                 try:
                     start_time = time.time()
                     packet = json.loads(msg)
                     parse_time = time.time() - start_time
-                    print(f"[Worker] JSONの解析に成功しました（{parse_time:.4f}秒）。キー: {list(packet.keys())}")
+                    # print(f"[Worker] JSONの解析に成功しました（{parse_time:.4f}秒）。キー: {list(packet.keys())}")
                 except json.JSONDecodeError as e:
                     print(f"[Worker] JSONの解析に失敗: {e}")
                     print(f"[Worker] メッセージプレビュー: {msg[:100]}...")
@@ -414,9 +424,10 @@ class PeopleTracker:
                 center_line_x = packet.get("center_line_x")
                 detections = packet.get("detections", [])
                 
-                print(f"[Worker] 抽出データ - center_line_x: {center_line_x}, 検出数: {len(detections)}")
+                # print(f"[Worker] 抽出データ - center_line_x: {center_line_x}, 検出数: {len(detections)}")
                 if detections:
-                    print(f"[Worker] 最初の検出サンプル: {detections[0]}")
+                    # print(f"[Worker] 最初の検出サンプル: {detections[0]}")
+                    pass
                 
                 if center_line_x is None:
                     print("[Worker] 警告: パケット内にcenter_line_xが見つかりません")
@@ -428,8 +439,8 @@ class PeopleTracker:
                 self.active_people = self.track_people(detections, self.active_people)
                 track_time = time.time() - start_time
                 
-                print(f"[Worker] 人物追跡を更新しました（{track_time:.4f}秒）。更新前: {previous_count}, 更新後: {len(self.active_people)}")
-                print(f"[Worker] アクティブな人物ID: {[p.id for p in self.active_people]}")
+                # print(f"[Worker] 人物追跡を更新しました（{track_time:.4f}秒）。更新前: {previous_count}, 更新後: {len(self.active_people)}")
+                # print(f"[Worker] アクティブな人物ID: {[p.id for p in self.active_people]}")
                 
                 # ラインを横切った人をカウント
                 cross_count = 0
@@ -442,9 +453,8 @@ class PeopleTracker:
                             print(f"[Worker] 人物ID {person.id} がラインを横断: {direction}")
                             print(f"[Worker] 軌跡: {person.trajectory[-2:]} (最後の2点を表示)")
                 
-                if cross_count == 0:
-                    print("[Worker] このフレームではライン横断は検出されませんでした")
-                
+                # 標準出力で描画
+                self.live_plot_example(center_line_x, image_width=640, image_height=480)
                 # 古いトラッキング対象を削除
                 current_time = time.time()
                 before_cleanup = len(self.active_people)
@@ -462,10 +472,9 @@ class PeopleTracker:
                 save_start = time.time()
                 self.counter.save_to_json()
                 save_time = time.time() - save_start
-                print(f"[Worker] データをJSONに保存しました（{save_time:.4f}秒）")
+                # print(f"[Worker] データをJSONに保存しました（{save_time:.4f}秒）")
                 
                 # 処理完了
-                print(f"[Worker] フレーム処理が完了しました。合計カウント - 入場: {self.counter.in_count}, 退場: {self.counter.out_count}")
                 print("-" * 50)
                 
             except Exception as e:
