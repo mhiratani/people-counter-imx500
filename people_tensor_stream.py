@@ -104,7 +104,7 @@ async def websocket_manager():
             print(f"WebSocketに接続を試行: {WEBSOCKET_URL}")
             try:
                 # 非同期接続
-                ws_connection = await connect(WEBSOCKET_URL)
+                ws_connection = await connect(WEBSOCKET_URL, open_timeout=1)
                 print("WebSocket接続成功")
                 # connection_ready.set() # 接続準備完了を通知 (任意)
             except Exception as e:
