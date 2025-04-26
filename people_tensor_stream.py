@@ -155,8 +155,8 @@ def process_frame_callback(request):
                 # dir(d) の出力に基づいて、正しい属性名を使用します
                 json_serializable_detections.append({
                     "box": d.box,      # 'box' 属性を使用
-                    "score": d.conf,   # 'conf' 属性を使用 (これがスコア)
-                    "class_id": d.category # 'category' 属性を使用
+                    "score": float(d.conf),   # 'conf' 属性を使用 (これがスコア)
+                    "class_id": int(d.category) # 'category' 属性を使用
                     # 他に必要な属性があればここに追加
                 })
             
