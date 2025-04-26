@@ -2,7 +2,8 @@ import json
 import os
 import sys
 import time
-import websocket
+import asyncio
+import websockets
 from datetime import datetime, timezone, timedelta
 
 from picamera2 import MappedArray, Picamera2
@@ -61,26 +62,95 @@ MAX_DETECTIONS = config.get('MAX_DETECTIONS', 30)
 # - 現場映像の最大混雑人数よりやや余裕を持たせると安定。
 # ----------------------------------------------
 
-# ======= クラス定義 =======
+# WebSocket送信用のキューと接続オブジェクト
+# キューの最大サイズを設定してメモリ溢れを防ぐ (例: 10フレーム分のデータ)
+data_queue = asyncio.Queue(maxsize=20)
+# WebSocket接続オブジェクトを共有するための変数
+# これを sender_task が参照します
+ws_connection = None
+# 接続管理タスクから sender_task に接続状態を通知するためのイベント（任意）
+# connection_ready = asyncio.Event()
+
+# ====== ヘルパー関数・クラス定義 ======
+# Detectionクラスや parse_detections 関数は元のコードと同じとします
+# 例として、検出データ構造を示す parse_detections を簡単な形で再掲します
 class Detection:
     def __init__(self, coords, category, conf, metadata):
         """検出オブジェクトを作成し、バウンディングボックス、カテゴリ、信頼度を記録"""
         self.category = category
         self.conf = conf
-        self.box = imx500.convert_inference_coords(coords, metadata, picam2) # [x, y, w, h] 形式
+        # imx500とpicam2インスタンスはメイン関数内で初期化され、ここで利用できるようにする必要があります
+        # parse_detections関数に引数として渡すか、グローバルまたはクラス変数としてアクセス可能にする必要があります
+        # 簡潔のため、ここでは仮にグローバル変数としてアクセスするとします (設計によっては改善の余地あり)
+        try:
+            self.box = imx500.convert_inference_coords(coords, metadata, picam2) # [x, y, w, h] 形式
+        except NameError:
+             print("Warning: imx500 or picam2 not initialized when creating Detection", file=sys.stderr)
+             self.box = coords # fallback
 
-# WebSocket準備
-ws = None
-if WEBSOCKET_URL and websocket:
-    try:
-        ws = websocket.WebSocket()
-        ws.connect(WEBSOCKET_URL)
-        print(f"WebSocket接続成功: {WEBSOCKET_URL}")
-    except Exception as e:
-        print(f"WebSocket接続失敗: {e}", file=sys.stderr)
-        ws = None
-elif WEBSOCKET_URL and not websocket:
-    print("websocket-client未インストール: pip install websocket-client を実行してください", file=sys.stderr)
+# ====== 非同期タスク ======
+
+async def websocket_manager():
+    """WebSocket接続を管理し、切断されたら再接続を試みるタスク"""
+    global ws_connection
+    reconnect_delay = 5 # 再接続待ち時間 (秒)
+
+    print("WebSocket接続管理タスクを開始")
+    while True:
+        if ws_connection is None or ws_connection.closed:
+            print(f"WebSocketに接続を試行: {WEBSOCKET_URL}")
+            try:
+                # 非同期接続
+                ws_connection = await websockets.connect(WEBSOCKET_URL)
+                print("WebSocket接続成功")
+                # connection_ready.set() # 接続準備完了を通知 (任意)
+            except Exception as e:
+                print(f"WebSocket接続失敗: {e}. {reconnect_delay}秒後に再試行...", file=sys.stderr)
+                ws_connection = None # 接続失敗時は None に戻す
+                # connection_ready.clear() # 接続が利用不可になったことを通知 (任意)
+                await asyncio.sleep(reconnect_delay)
+        else:
+            # 接続が確立されている場合は、切断されるのを待つか、軽いping/pongなどを送る
+            # websocketsライブラリは通常、接続が閉じられたら例外を発生させる
+            try:
+                # 接続が生きているか確認するためのパッシブな待機
+                # 相手からの切断やエラーが発生するまでここで待機状態になることが多い
+                await ws_connection.wait_closed()
+                print("WebSocket接続が閉じられました。再接続を試行します。")
+                ws_connection = None
+                # connection_ready.clear()
+            except Exception as e:
+                 print(f"WebSocketエラー: {e}. 接続管理を再開します。", file=sys.stderr)
+                 ws_connection = None
+                 # connection_ready.clear()
+            await asyncio.sleep(1) # 短い遅延を入れてループが暴走しないようにする
+
+async def sender_task(queue: asyncio.Queue):
+    """キューからデータを取り出し、WebSocketで送信するタスク"""
+    print("データ送信タスクを開始")
+    while True:
+        # キューからデータを取り出す (データが入るまで待機)
+        packet = await queue.get()
+
+        # WebSocket接続が確立されているか確認
+        if ws_connection and not ws_connection.closed:
+            try:
+                msg = json.dumps(packet)
+                # 非同期送信
+                await ws_connection.send(msg)
+                # print(f"WebSocket送信成功: {msg[:100]}...") # 送信確認ログ (量が多いと邪魔かも)
+            except Exception as e:
+                print(f"WebSocket送信エラー: {e}", file=sys.stderr)
+                # 送信に失敗した場合は、データを再キューイングするか破棄するか決める
+                # 今回はシンプルに破棄します（キュー溢れリスクを避けるため）
+                # await queue.put(packet) # 再キューイングする場合
+        else:
+            # 接続がない場合はデータを破棄 (または再キューイング)
+            # print("WebSocketが未接続または閉じられているためデータを破棄")
+            pass # ログは量が多いと邪魔なのでコメントアウト
+
+        # queue.task_done() # get()したアイテムの処理が完了したことを通知 (join用, 今回は必須ではない)
+
 
 def parse_detections(metadata: dict):
     """
@@ -135,8 +205,11 @@ def parse_detections(metadata: dict):
         traceback.print_exc()
         return [] # エラー時は空リストを返す
 
+# ====== カメラフレーム処理コールバック ======
+# Picamera2 から同期的に呼び出されるため、async def にはできない
+# ここでは await を使わず、キューにデータを置くだけ
 def process_frame_callback(request):
-    """フレームごとの処理を行うコールバック関数"""
+    """フレームごとの処理を行うコールバック関数 (カメラライブラリから呼ばれる)"""
 
     try:
         with MappedArray(request, 'main') as m:
@@ -146,45 +219,63 @@ def process_frame_callback(request):
         # メタデータを取得
         metadata = request.get_metadata()
         if metadata is None:
-            return
-        else:
-            detections = parse_detections(metadata)
-            # DetectionオブジェクトをJSONシリアライズ可能な辞書のリストに変換
-            json_serializable_detections = []
-            for d in detections:
-                # dir(d) の出力に基づいて、正しい属性名を使用します
-                json_serializable_detections.append({
-                    "box": d.box,      # 'box' 属性を使用
-                    "score": float(d.conf),   # 'conf' 属性を使用 (これがスコア)
-                    "class_id": int(d.category) # 'category' 属性を使用
-                    # 他に必要な属性があればここに追加
-                })
-            
-            JST = timezone(timedelta(hours=9))
-            # 送信処理
-            packet = {
-                "center_line_x": center_line_x,
-                "camera_id": CAMERA_NAME,
-                "timestamp": datetime.now(JST).isoformat(),
-                "detections": json_serializable_detections
-            }
-            msg = json.dumps(packet)
-            if ws:
-                ws.send(msg)
-            else:
-                print(f"[DummySend] {msg}")
+            return # メタデータがない場合は処理しない
+
+        detections = parse_detections(metadata) # Detectionオブジェクトのリスト
+
+        # DetectionオブジェクトをJSONシリアライズ可能な辞書のリストに変換
+        json_serializable_detections = []
+        # フレームサイズはMappedArrayから取得するか、初期設定で保持しておく
+        # ここではrequestから取得する元のロジックを模倣
+        try:
+             with MappedArray(request, 'main') as m:
+                 frame_height, frame_width = m.array.shape[:2]
+                 center_line_x = frame_width // 2
+        except Exception as map_e:
+             print(f"MappedArrayエラー: {map_e}", file=sys.stderr)
+             frame_width, frame_height = 0, 0 # fallback
+             center_line_x = 0
+
+
+        for d in detections:
+            json_serializable_detections.append({
+                "box": d.box,
+                "score": float(d.conf),
+                "class_id": int(d.category)
+                # 他に必要な属性があればここに追加
+            })
+
+        JST = timezone(timedelta(hours=9))
+        # 送信用パケットを作成
+        packet = {
+            "center_line_x": center_line_x,
+            "camera_id": CAMERA_NAME,
+            "timestamp": datetime.now(JST).isoformat(),
+            "detections": json_serializable_detections
+        }
+
+        # データを非同期キューに入れる
+        # キューが満杯の場合はエラーになる可能性があります (QueueFull)
+        # 非同期タスクがキューから取り出す速度が遅い場合に発生します。
+        # エラー処理として、ここでは警告を出力し、そのフレームのデータは破棄します。
+        try:
+            data_queue.put_nowait(packet)
+            # print("データをキューに追加") # キュー追加確認ログ (量が多いと邪魔)
+        except asyncio.QueueFull:
+            print("警告: データキューが満杯です。データをスキップします。", file=sys.stderr)
 
     except Exception as e:
-        print(f"コールバックエラー: {e}")
+        print(f"コールバック処理エラー: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc()
-    return
 
+# ====== メイン非同期処理 ======
 
-# ======= メイン処理 =======
-if __name__ == "__main__":
+async def main():
+    """非同期アプリケーションのエントリーポイント"""
+    global imx500, picam2 # インスタンスをグローバルとしてアクセス可能にする（parse_detectionsのため）
 
-    # IMX500の初期化
+    # IMX500の初期化 (元のコードと同じ)
     print("IMX500 AIカメラモジュールを初期化中...")
     try:
         imx500 = IMX500(MODEL_PATH)
@@ -212,51 +303,104 @@ if __name__ == "__main__":
         # Picamera2の初期化
         print("カメラを初期化中...")
         picam2 = Picamera2(imx500.camera_num)
-        main = {'format': 'XRGB8888'} # AI検出結果の描画は行わないのでプレビューは不要だが、コールバックには必要
-
         # ヘッドレス環境用の設定
-        config = picam2.create_preview_configuration(main, controls={"FrameRate": intrinsics.inference_rate}, buffer_count=6)
+        # Picamera2の設定部分は、コールバックが呼ばれるように適切に行う
+        # ここでは元のコードの設定例をそのまま利用
+        main_config = {'size': (intrinsics.width, intrinsics.height), 'format': 'XRGB8888'} # 推論サイズに合わせる
+        # main_config = {'format': 'XRGB8888'}
+        config = picam2.create_preview_configuration(main_config, controls={"FrameRate": intrinsics.inference_rate}, buffer_count=6)
 
         imx500.show_network_fw_progress_bar()
 
         # カメラの設定と起動
         picam2.configure(config)
-        time.sleep(0.5)  # 少し待機
-        picam2.start()  # ヘッドレスモードでスタート
-        
+        time.sleep(0.5) # 少し待機
         if getattr(intrinsics, 'preserve_aspect_ratio', False):
             imx500.set_auto_aspect_ratio()
+
+        # ====== 非同期タスクの開始 ======
+
+        # WebSocket接続管理タスクを開始
+        ws_manager_task = asyncio.create_task(websocket_manager())
+
+        # データ送信タスクを開始 (キューを渡す)
+        sender_task_obj = asyncio.create_task(sender_task(data_queue))
+
+        # カメラの起動
+        # start() してから callback が設定されると最初のフレームを取りこぼす可能性があるので、
+        # callback 設定後に start() する方が安全かもしれません。
+        # ただし、Picamera2のドキュメントやサンプルに従うのがベストです。
+        # 元コードでは設定後にstart()しているのでそれに従います。
+        picam2.start()
         print("カメラ起動完了")
+        # コールバックを設定
+        picam2.pre_callback = process_frame_callback
+        print("カメラコールバック設定完了。Ctrl+Cで終了します。")
+
+
+        # ====== メインループ ======
+        # ここでは非同期タスクが動いているので、await でタスクの完了を待つか、
+        # シグナルを待つなどしてプログラムを維持します。
+        # 簡単には、終了シグナルを待つか、タスクが完了するまで待機します。
+        # 通常、常時実行されるプログラムなので、KeyboardInterrupt を待つ形になります。
+        try:
+            # ここで sender_task や ws_manager_task がキャンセルされるまで待機する
+            # あるいは、単に無限ループで KeyboardInterrupt を待つ asyncio の run に任せる
+            # asyncio.run(main()) が KeyboardInterrupt を捕捉してクリーンアップに進む
+            await asyncio.Future() # 何もせず無限に待機し、キャンセルされるのを待つ
+        except asyncio.CancelledError:
+            print("メイン処理がキャンセルされました。")
+
+
     except Exception as e:
-        print(f"カメラ初期化エラーまたはIMX500初期化エラー: {e}", file=sys.stderr)
+        print(f"初期化エラーまたはメイン処理エラー: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc()
-        sys.exit(1)
-
-    # コールバックを設定
-    picam2.pre_callback = process_frame_callback
-    print("Ctrl+Cで終了します")
-    
-    try:
-        # メインループ - コールバックが処理を行うので、ここでは待機するだけ
-        while True:
-            time.sleep(0.01)  # CPUの負荷を減らすために短い時間待機
-    except KeyboardInterrupt:
-        print("終了中...")
-
     finally:
-        # リソースの解放
+        # ====== リソースの解放 ======
+        print("終了処理を開始...")
+        # 非同期タスクをキャンセルして完了を待つ
+        if 'sender_task_obj' in locals() and sender_task_obj:
+            sender_task_obj.cancel()
+        if 'ws_manager_task' in locals() and ws_manager_task:
+             ws_manager_task.cancel()
+
+        # タスクがキャンセルされ、完了するのを待つ（エラーは無視する）
         try:
-            if 'picam2' in locals() and picam2: # picam2が初期化されているか確認
+            await asyncio.gather(sender_task_obj, ws_manager_task, return_exceptions=True)
+        except Exception: # gather 自体が例外を出す場合もあるので広めに捕捉
+             pass
+        print("非同期タスク停止完了")
+
+        # WebSocket接続を閉じる
+        if ws_connection and not ws_connection.closed:
+            print("WebSocketを閉じています...")
+            try:
+                await ws_connection.close()
+                print("WebSocketを閉じました")
+            except Exception as e:
+                 print(f"WebSocketクローズエラー: {e}", file=sys.stderr)
+
+
+        # カメラとIMX500モジュールを閉じる (元のコードと同じ)
+        try:
+            if 'picam2' in locals() and picam2:
                 picam2.stop()
                 picam2.close() # カメラを閉じる
                 print("カメラを停止しました")
             if 'imx500' in locals() and imx500: # imx500が初期化されているか確認
                 imx500.close() # AIモジュールを閉じる
                 print("IMX500モジュールを閉じました")
-            if ws:
-                ws.close()
-                print("WebSocketを閉じました")
-            print("プログラムを終了します")
         except Exception as e:
-            print(f"終了処理エラー: {e}", file=sys.stderr)
+            print(f"カメラ/IMX500クローズエラー: {e}", file=sys.stderr)
+
+        print("プログラムを終了します")
+
+
+# ====== プログラム実行開始 ======
+if __name__ == "__main__":
+    # asyncioアプリケーションとして実行
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Ctrl+Cを受信しました。終了処理中...")
