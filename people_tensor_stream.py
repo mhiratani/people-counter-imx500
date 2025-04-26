@@ -6,6 +6,7 @@ import asyncio
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 from datetime import datetime, timezone, timedelta
+import queue
 
 from picamera2 import MappedArray, Picamera2
 from picamera2.devices import IMX500
@@ -65,7 +66,8 @@ MAX_DETECTIONS = config.get('MAX_DETECTIONS', 30)
 
 # WebSocket送信用のキューと接続オブジェクト
 # キューの最大サイズを設定してメモリ溢れを防ぐ (例: 10フレーム分のデータ)
-data_queue = asyncio.Queue(maxsize=100)
+data_queue_threadsafe = queue.Queue(maxsize=100)
+data_queue_asyncio = asyncio.Queue(maxsize=100)
 # WebSocket接続オブジェクトを共有するための変数
 # これを sender_task が参照します
 ws_connection = None
@@ -125,6 +127,14 @@ async def websocket_manager():
                 ws_connection = None
                 # connection_ready.clear()
             await asyncio.sleep(1)
+
+async def threadsafe_queue_bridge():
+    while True:
+        packet = await asyncio.to_thread(data_queue_threadsafe.get)
+        try:
+            await data_queue_asyncio.put(packet)
+        except asyncio.QueueFull:
+            print("asyncioキューが満杯。破棄", file=sys.stderr)
 
 async def sender_task(queue: asyncio.Queue):
     """キューからデータを取り出し、WebSocketで送信するタスク"""
@@ -261,11 +271,9 @@ def process_frame_callback(request):
         }
 
         try:
-            loop = asyncio.get_event_loop()
-            loop.call_soon_threadsafe(data_queue.put_nowait, packet)
-            print("データをキューに追加(スレッドセーフ)")
-        except Exception as e:
-            print(f"データキューにputできませんでした: {e}", file=sys.stderr)
+            data_queue_threadsafe.put_nowait(packet)
+        except queue.Full:
+            print("データカメラキューが満杯なので破棄", file=sys.stderr)
 
     except Exception as e:
         print(f"コールバック処理エラー: {e}", file=sys.stderr)
@@ -326,7 +334,8 @@ async def main():
         ws_manager_task = asyncio.create_task(websocket_manager())
 
         # データ送信タスクを開始 (キューを渡す)
-        sender_task_obj = asyncio.create_task(sender_task(data_queue))
+        bridge_task = asyncio.create_task(threadsafe_queue_bridge())
+        sender_task_obj = asyncio.create_task(sender_task(data_queue_asyncio))
 
         # カメラの起動
         # start() してから callback が設定されると最初のフレームを取りこぼす可能性があるので、
@@ -346,10 +355,7 @@ async def main():
         # 簡単には、終了シグナルを待つか、タスクが完了するまで待機します。
         # 通常、常時実行されるプログラムなので、KeyboardInterrupt を待つ形になります。
         try:
-            # ここで sender_task や ws_manager_task がキャンセルされるまで待機する
-            # あるいは、単に無限ループで KeyboardInterrupt を待つ asyncio の run に任せる
-            # asyncio.run(main()) が KeyboardInterrupt を捕捉してクリーンアップに進む
-            await asyncio.Future() # 何もせず無限に待機し、キャンセルされるのを待つ
+            await asyncio.Future()  # 何もせず保つ
         except asyncio.CancelledError:
             print("メイン処理がキャンセルされました。")
 
@@ -362,8 +368,11 @@ async def main():
         # ====== リソースの解放 ======
         print("終了処理を開始...")
         # 非同期タスクをキャンセルして完了を待つ
-        if 'sender_task_obj' in locals() and sender_task_obj:
-            sender_task_obj.cancel()
+        bridge_task.cancel()
+        sender_task_obj.cancel()
+        ws_manager_task.cancel()
+        await asyncio.gather(bridge_task, sender_task_obj, ws_manager_task, return_exceptions=True)
+
         if 'ws_manager_task' in locals() and ws_manager_task:
              ws_manager_task.cancel()
 
