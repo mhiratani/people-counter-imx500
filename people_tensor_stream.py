@@ -106,6 +106,7 @@ async def websocket_manager():
                 # 非同期接続
                 ws_connection = await connect(WEBSOCKET_URL, open_timeout=1)
                 print("WebSocket接続成功")
+                ws_ready_event.set()
                 # connection_ready.set() # 接続準備完了を通知 (任意)
             except Exception as e:
                 import traceback
@@ -152,7 +153,6 @@ async def sender_task(queue: asyncio.Queue):
         packet = await queue.get()
         print(f"送信したいデータ：{packet} (キュー長:{queue.qsize()})")
 
-        print(f"送信したいデータ：{packet}")
         # WebSocket接続が確立されているか確認
         print("ws_connection:", ws_connection)
         print("type(ws_connection):", type(ws_connection))
@@ -160,10 +160,14 @@ async def sender_task(queue: asyncio.Queue):
         if ws_connection:
             print("ws_connection.closed:", ws_connection.closed)
         print('ws_connection is', ws_connection, 'closed:', getattr(ws_connection, "closed", "N/A"))
-        if ws_connection and not ws_connection.closed:
+        # if ws_connection and not ws_connection.closed:
+        if True:
             try:
+                print("json.dumps前")
                 msg = json.dumps(packet)
+                print(f"json.dumps終わり:{msg}")
                 # 非同期送信
+                print("WebSocket送信します")
                 await ws_connection.send(msg)
                 print(f"WebSocket送信成功: {msg[:100]}...") # 送信確認ログ (量が多いと邪魔かも)
             except Exception as e:
@@ -343,6 +347,11 @@ async def main():
         # WebSocket接続管理タスクを開始
         ws_manager_task = asyncio.create_task(websocket_manager())
 
+        # データ送信タスク開始を抑制（WebSocket準備まで待つ）
+        print("WebSocketの接続完了を待っています...")
+        await ws_ready_event.wait()
+        print("WebSocket接続完了！データ送信タスクを開始します。")
+
         # データ送信タスクを開始 (キューを渡す)
         bridge_task = asyncio.create_task(threadsafe_queue_bridge())
         sender_task_obj = asyncio.create_task(sender_task(data_queue_asyncio))
@@ -422,6 +431,7 @@ async def main():
 if __name__ == "__main__":
     # asyncioアプリケーションとして実行
     try:
+        ws_ready_event = asyncio.Event()
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Ctrl+Cを受信しました。終了処理中...")
