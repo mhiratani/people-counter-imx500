@@ -149,13 +149,24 @@ def process_frame_callback(request):
             return
         else:
             detections = parse_detections(metadata)
+            # DetectionオブジェクトをJSONシリアライズ可能な辞書のリストに変換
+            json_serializable_detections = []
+            for d in detections:
+                # dir(d) の出力に基づいて、正しい属性名を使用します
+                json_serializable_detections.append({
+                    "box": d.box,      # 'box' 属性を使用
+                    "score": d.conf,   # 'conf' 属性を使用 (これがスコア)
+                    "class_id": d.category # 'category' 属性を使用
+                    # 他に必要な属性があればここに追加
+                })
+            
             JST = timezone(timedelta(hours=9))
             # 送信処理
             packet = {
                 "center_line_x": center_line_x,
                 "camera_id": CAMERA_NAME,
                 "timestamp": datetime.now(JST).isoformat(),
-                "detections": detections
+                "detections": json_serializable_detections
             }
             msg = json.dumps(packet)
             if ws:
