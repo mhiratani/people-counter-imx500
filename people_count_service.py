@@ -374,7 +374,7 @@ class PeopleTracker:
     async def detect_server(self, websocket):
         """WebSocketサーバー: クライアントからのメッセージを受信してキューに追加"""
         client_id = id(websocket)
-        print(f"[WS] 新しい接続が確立されました。クライアントID: {client_id} パス: {websocket.path}")
+        print(f"[WS] 新しい接続が確立されました。クライアントID: {client_id}")
         try:
             async for message in websocket:
                 print(f"[WS] クライアント{client_id}からメッセージを受信。サイズ: {len(message)}バイト")
@@ -477,10 +477,11 @@ class PeopleTracker:
         print(f"[Server] WebSocketサーバーを0.0.0.0:8765で起動します")
         async with serve(self.detect_server, "0.0.0.0", 8765):
             print(f"[Server] WebSocketサーバーが初期化されました")
-        
-        # サーバーとワーカーを実行
-        print(f"[Server] サーバーとワーカータスクを開始します")
-        await self.tensor_worker() 
+            worker_task = asyncio.create_task(self.tensor_worker())
+            try:
+                await asyncio.Future()  # ここで永遠に止まる（Ctrl+Cまで動き続ける）
+            except asyncio.CancelledError:
+                print("[Server] サーバーの無限待機がキャンセルされました。終了します。")
 
 def main():
     """メイン関数"""
