@@ -3,7 +3,8 @@ import os
 import sys
 import time
 import asyncio
-import websockets
+from websockets.asyncio.client import connect
+from websockets.exceptions import ConnectionClosed
 from datetime import datetime, timezone, timedelta
 
 from picamera2 import MappedArray, Picamera2
@@ -93,7 +94,7 @@ class Detection:
 async def websocket_manager():
     """WebSocket接続を管理し、切断されたら再接続を試みるタスク"""
     global ws_connection
-    reconnect_delay = 5 # 再接続待ち時間 (秒)
+    reconnect_delay = 5  # 再接続待ち時間 (秒)
 
     print("WebSocket接続管理タスクを開始")
     while True:
@@ -101,7 +102,7 @@ async def websocket_manager():
             print(f"WebSocketに接続を試行: {WEBSOCKET_URL}")
             try:
                 # 非同期接続
-                ws_connection = await websockets.connect(WEBSOCKET_URL)
+                ws_connection = await connect(WEBSOCKET_URL)
                 print("WebSocket接続成功")
                 # connection_ready.set() # 接続準備完了を通知 (任意)
             except Exception as e:
@@ -120,10 +121,10 @@ async def websocket_manager():
                 ws_connection = None
                 # connection_ready.clear()
             except Exception as e:
-                 print(f"WebSocketエラー: {e}. 接続管理を再開します。", file=sys.stderr)
-                 ws_connection = None
-                 # connection_ready.clear()
-            await asyncio.sleep(1) # 短い遅延を入れてループが暴走しないようにする
+                print(f"WebSocketエラー: {e}. 接続管理を再開します。", file=sys.stderr)
+                ws_connection = None
+                # connection_ready.clear()
+            await asyncio.sleep(1)
 
 async def sender_task(queue: asyncio.Queue):
     """キューからデータを取り出し、WebSocketで送信するタスク"""

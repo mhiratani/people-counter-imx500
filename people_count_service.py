@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 import numpy as np
 import asyncio
+from websockets.asyncio.server import serve
 import websockets
 from scipy.optimize import linear_sum_assignment
 import traceback
@@ -370,17 +371,17 @@ class PeopleTracker:
             
             self.last_log_time = current_time
 
-    async def detect_server(self, websocket, path):
+    async def detect_server(self, websocket):
         """WebSocketサーバー: クライアントからのメッセージを受信してキューに追加"""
         client_id = id(websocket)
-        print(f"[WS] 新しい接続が確立されました。クライアントID: {client_id}, パス: {path}")
+        print(f"[WS] 新しい接続が確立されました。クライアントID: {client_id} パス: {websocket.path}")
         try:
             async for message in websocket:
                 print(f"[WS] クライアント{client_id}からメッセージを受信。サイズ: {len(message)}バイト")
                 print(f"[WS] メッセージプレビュー: {message[:100]}..." if len(message) > 100 else f"[WS] メッセージ: {message}")
                 await self.tensor_queue.put(message)
                 print(f"[WS] メッセージをキューに追加しました。現在のキューサイズ: {self.tensor_queue.qsize()}")
-        except websockets.exceptions.ConnectionClosed as e:
+        except websockets.ConnectionClosed as e:
             print(f"[WS] クライアント{client_id}との接続が閉じられました。コード: {e.code}, 理由: {e.reason}")
         except Exception as e:
             print(f"[WS] クライアント{client_id}との通信中にエラーが発生: {e}")
@@ -474,15 +475,12 @@ class PeopleTracker:
     async def run(self):
         """サーバーを起動してワーカーを実行"""
         print(f"[Server] WebSocketサーバーを0.0.0.0:8765で起動します")
-        start_server = websockets.serve(self.detect_server, "0.0.0.0", 8765)
-        print(f"[Server] WebSocketサーバーが初期化されました")
+        async with serve(self.detect_server, "0.0.0.0", 8765):
+            print(f"[Server] WebSocketサーバーが初期化されました")
         
         # サーバーとワーカーを実行
         print(f"[Server] サーバーとワーカータスクを開始します")
-        await asyncio.gather(
-            start_server,
-            self.tensor_worker()
-        )
+        await self.tensor_worker() 
 
 def main():
     """メイン関数"""
