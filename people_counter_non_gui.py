@@ -32,7 +32,7 @@ config = load_config('config.json')
 camera_name = load_config('camera_name.json')
 
 # 人流カウント設定
-PERSON_CLASS_ID = config.get('DETECTION_THRESHOLD', 0)
+PERSON_CLASS_ID = 0
 # 人物クラスのID（通常COCOデータセットでは0）
 
 MAX_TRACKING_DISTANCE = config.get('MAX_TRACKING_DISTANCE', 60)
@@ -361,41 +361,51 @@ def track_people(detections, active_people):
                 # より高度なコスト例: cost = (1.0 - iou) + (distance / MAX_TRACKING_DISTANCE) * 0.1 # IOUを重視
                 cost_matrix[i, j] = cost
 
-    # ハンガリアンアルゴリズムを実行し、最適なマッチングを見つける
-    # matched_person_indices: active_peopleのインデックスの配列
-    # matched_detection_indices: detectionsのインデックスの配列
-    matched_person_indices, matched_detection_indices = linear_sum_assignment(cost_matrix)
+    # コスト行列の全要素がinf or どの行or列も全てinfならreturn
+    if (
+        np.all(np.isinf(cost_matrix)) or 
+        np.any(np.all(np.isinf(cost_matrix), axis=0)) or 
+        np.any(np.all(np.isinf(cost_matrix), axis=1))
+    ):
+        # print("Assignment infeasible: some row or column is all inf.")
+        return active_people
+    else:
+        # ハンガリアンアルゴリズムを実行し、最適なマッチングを見つける
+        # matched_person_indices: active_peopleのインデックスの配列
+        # matched_detection_indices: detectionsのインデックスの配列
+        # print("Will run linear_sum_assignment")
+        matched_person_indices, matched_detection_indices = linear_sum_assignment(cost_matrix)
 
-    # マッチング結果を処理
-    new_people = []
-    # マッチした検出結果のインデックスを記録
-    used_detections = set(matched_detection_indices)
+        # マッチング結果を処理
+        new_people = []
+        # マッチした検出結果のインデックスを記録
+        used_detections = set(matched_detection_indices)
 
-    # マッチした人物を更新して新しいリストに追加
-    for i, j in zip(matched_person_indices, matched_detection_indices):
-        # コストがinfの場合は有効なマッチではないのでスキップ (linear_sum_assignmentはinfも考慮する)
-        if cost_matrix[i, j] == np.inf:
-            continue
-        person = active_people[i]
-        detection = detections[j]
-        person.update(detection.box) # 人物情報を検出結果で更新
-        new_people.append(person)
-
-    # マッチしなかった既存の人物を新しいリストに追加 (タイムアウト判定は後で行われる)
-    matched_person_ids = {p.id for p in new_people} # 更新された人物のIDセット
-    for person in active_people:
-        if person.id not in matched_person_ids:
-            # この人物は今回のフレームでは検出されなかった
-            # 情報を更新しないままリストに追加。last_seenは前回のまま。
+        # マッチした人物を更新して新しいリストに追加
+        for i, j in zip(matched_person_indices, matched_detection_indices):
+            # コストがinfの場合は有効なマッチではないのでスキップ (linear_sum_assignmentはinfも考慮する)
+            if cost_matrix[i, j] == np.inf:
+                continue
+            person = active_people[i]
+            detection = detections[j]
+            person.update(detection.box) # 人物情報を検出結果で更新
             new_people.append(person)
 
-    # マッチしなかった新しい検出結果を新しい人物としてリストに追加
-    for j, detection in enumerate(detections):
-        if j not in used_detections:
-            new_people.append(Person(detection.box)) # 新しい人物を作成
+        # マッチしなかった既存の人物を新しいリストに追加 (タイムアウト判定は後で行われる)
+        matched_person_ids = {p.id for p in new_people} # 更新された人物のIDセット
+        for person in active_people:
+            if person.id not in matched_person_ids:
+                # この人物は今回のフレームでは検出されなかった
+                # 情報を更新しないままリストに追加。last_seenは前回のまま。
+                new_people.append(person)
 
-    # ここではタイムアウト判定は行わない。process_frame_callbackでまとめて行う。
-    return new_people
+        # マッチしなかった新しい検出結果を新しい人物としてリストに追加
+        for j, detection in enumerate(detections):
+            if j not in used_detections:
+                new_people.append(Person(detection.box)) # 新しい人物を作成
+
+        # ここではタイムアウト判定は行わない。process_frame_callbackでまとめて行う。
+        return new_people
 
 
 def check_line_crossing(person, center_line_x, frame=None):
@@ -406,7 +416,7 @@ def check_line_crossing(person, center_line_x, frame=None):
     prev_x = person.trajectory[-2][0]
     curr_x = person.trajectory[-1][0]
 
-    # 中央ラインを横切った場合
+    # 左→右: 中央線を未満→以上で通過
     if (prev_x < center_line_x and curr_x >= center_line_x):
         person.counted = True
         person.crossed_direction = "left_to_right"
@@ -416,6 +426,7 @@ def check_line_crossing(person, center_line_x, frame=None):
             save_debug_image(frame, person, center_line_x, "left_to_right")
 
         return "left_to_right"
+    # 右→左: 中央線を以上→未満で通過
     elif (prev_x >= center_line_x and curr_x < center_line_x):
         person.counted = True
         person.crossed_direction = "right_to_left"
@@ -423,6 +434,8 @@ def check_line_crossing(person, center_line_x, frame=None):
         # デバッグモードで画像を保存
         if DEBUG_MODE and frame is not None:
             save_debug_image(frame, person, center_line_x, "right_to_left")
+
+        return "right_to_left"
 
     return None
 
@@ -483,7 +496,6 @@ def save_image_at_startup(frame, center_line_x):
     except Exception as e:
         print(f"起動時に画像を保存する関数の実行エラー: {e}")
 
-
 def process_frame_callback(request):
     """フレームごとの処理を行うコールバック関数"""
     global active_people, counter, last_log_time
@@ -504,6 +516,11 @@ def process_frame_callback(request):
             # 検出処理
             detections = parse_detections(metadata)
 
+        # 人物追跡を更新
+        active_people = track_people(detections, active_people)
+        if not isinstance(active_people, list):
+            print(f"track_people returned : {type(active_people)}")
+
         # フレームサイズを取得 (デバッグ画像保存やライン描画で使用)
         with MappedArray(request, 'main') as m:
             frame_height, frame_width = m.array.shape[:2]
@@ -520,17 +537,14 @@ def process_frame_callback(request):
             if DEBUG_MODE:
                 frame_copy = m.array.copy()
 
-        # 人物追跡を更新 - 書き換えた track_people 関数を呼び出す
-        active_people = track_people(detections, active_people)
-
         # ラインを横切った人をカウント
-        # 注意: ここで active_people の中には更新されたものと更新されなかったものが混在
         for person in active_people:
             # 少なくとも2フレーム以上の軌跡がある、かつ、まだカウントされていない人物が対象
             if len(person.trajectory) >= 2 and not person.counted:
                 direction = check_line_crossing(person, center_line_x, frame_copy)
                 if direction:
                     counter.update(direction)
+                    person.counted = True
                     print(f"Person ID {person.id} crossed line: {direction}")
 
         # 古いトラッキング対象を削除 (last_seen が TRACKING_TIMEOUT を超えたもの)
@@ -550,7 +564,7 @@ def process_frame_callback(request):
             print(f"Next save in: {remaining} seconds")
             print(f"--------------------------------------------------")
 
-            last_log_time = current_time
+        last_log_time = current_time
 
         # 指定間隔ごとにJSONファイルに保存
         counter.save_to_json()
