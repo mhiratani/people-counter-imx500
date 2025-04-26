@@ -97,6 +97,10 @@ DEBUG_IMAGES_SUBDIR_NAME = config.get('DEBUG_IMAGES_SUBDIR_NAME', 'debug_images'
 # デバッグディレクトリを出力ディレクトリの配下に定義ディレクトリの名前
 DEBUG_IMAGES_DIR = os.path.join(OUTPUT_DIR, DEBUG_IMAGES_SUBDIR_NAME)
 
+# RTSP配信先URL
+RTSP_SERVER_URL = config.get('RTSP_SERVER_URL',None)
+RTSP_SERVER_PORT = config.get('RTSP_SERVER_PORT',1234)
+
 # ログ設定
 LOG_INTERVAL = 5  # ログ出力間隔（秒）
 
@@ -680,32 +684,35 @@ if __name__ == "__main__":
         print("カメラ起動完了")
 
         # RTSP配信用 設定値
-        FRAME_WIDTH  = config.get('FRAME_WIDTH', 640)   # 環境にあわせ適宜
-        FRAME_HEIGHT = config.get('FRAME_HEIGHT', 480)
-        FRAME_RATE = int(intrinsics.inference_rate) if hasattr(intrinsics, 'inference_rate') else 15
-        RTSP_URL = "rtsp://172.22.1.12:8554/stream"
+        if RTSP_SERVER_URL:
+            FRAME_WIDTH  = config.get('FRAME_WIDTH', 640)   # 環境にあわせ適宜
+            FRAME_HEIGHT = config.get('FRAME_HEIGHT', 480)
+            FRAME_RATE = int(intrinsics.inference_rate) if hasattr(intrinsics, 'inference_rate') else 15
+            RTSP_URL = f"{RTSP_SERVER_URL}:{RTSP_SERVER_PORT}/stream"
 
-        ffmpeg_cmd = [
-            "ffmpeg",
-            "-re",
-            "-f", "rawvideo",
-            "-pix_fmt", "bgr24",
-            "-s", f"{FRAME_WIDTH}x{FRAME_HEIGHT}",
-            "-r", str(FRAME_RATE),
-            "-i", "-",              # 入力：標準入力
-            "-an",                  # 音声なし
-            "-c:v", "libx264",
-            "-preset", "ultrafast", # 低遅延
-            "-tune", "zerolatency",
-            "-f", "rtsp",
-            RTSP_URL
-        ]
-        try:
-            ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
-            print("ffmpegによるRTSP配信プロセス起動")
-        except Exception as e:
-            print(f"ffmpeg起動失敗: {e}")
-            sys.exit(1)
+            ffmpeg_cmd = [
+                "ffmpeg",
+                "-re",
+                "-f", "rawvideo",
+                "-pix_fmt", "bgr24",
+                "-s", f"{FRAME_WIDTH}x{FRAME_HEIGHT}",
+                "-r", str(FRAME_RATE),
+                "-i", "-",              # 入力：標準入力
+                "-an",                  # 音声なし
+                "-c:v", "libx264",
+                "-preset", "ultrafast", # 低遅延
+                "-tune", "zerolatency",
+                "-f", "rtsp",
+                RTSP_URL
+            ]
+            try:
+                ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+                print("ffmpegによるRTSP配信プロセス起動")
+            except Exception as e:
+                print(f"ffmpeg起動失敗: {e}")
+                sys.exit(1)
+        else:
+            print(f"RTSP_SERVER_URLが未指定のためRTSP配信は行いません")
 
     except Exception as e:
         print(f"カメラ初期化エラーまたはIMX500初期化エラー: {e}")
