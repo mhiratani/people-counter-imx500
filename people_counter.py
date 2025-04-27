@@ -56,7 +56,6 @@ class Person:
         Person.next_id += 1
         self.box = box
         self.trajectory = [self.get_center()]
-        self.counted = False
         self.first_seen = time.time()
         self.last_seen = time.time()
         self.crossed_direction = None
@@ -241,7 +240,7 @@ def track_people(detections, active_people):
 
 def check_line_crossing(person, center_line_x):
     """中央ラインを横切ったかチェック"""
-    if len(person.trajectory) < 2 or person.counted:
+    if len(person.trajectory) < 2:
         return None
     
     prev_x = person.trajectory[-2][0]
@@ -249,11 +248,9 @@ def check_line_crossing(person, center_line_x):
     
     # 中央ラインを横切った場合
     if (prev_x < center_line_x and curr_x >= center_line_x):
-        person.counted = True
         person.crossed_direction = "left_to_right"
         return "left_to_right"
     elif (prev_x >= center_line_x and curr_x < center_line_x):
-        person.counted = True
         person.crossed_direction = "right_to_left"
         return "right_to_left"
     

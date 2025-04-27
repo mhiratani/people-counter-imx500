@@ -136,7 +136,6 @@ class Person:
         Person.next_id += 1
         self.box = box # [x, y, w, h] 形式
         self.trajectory = [self.get_center()]
-        self.counted = False
         self.first_seen = time.time()
         self.last_seen = time.time()
         self.crossed_direction = None
@@ -427,7 +426,7 @@ def track_people(detections, active_people):
 
 def check_line_crossing(person, center_line_x, frame=None):
     """中央ラインを横切ったかチェック"""
-    if len(person.trajectory) < 2 or person.counted:
+    if len(person.trajectory):
         return None
 
     prev_x = person.trajectory[-2][0]
@@ -435,7 +434,6 @@ def check_line_crossing(person, center_line_x, frame=None):
 
     # 左→右: 中央線を未満→以上で通過
     if (prev_x < center_line_x and curr_x >= center_line_x):
-        person.counted = True
         person.crossed_direction = "left_to_right"
 
         # デバッグモードで画像を保存
@@ -445,7 +443,6 @@ def check_line_crossing(person, center_line_x, frame=None):
         return "left_to_right"
     # 右→左: 中央線を以上→未満で通過
     elif (prev_x >= center_line_x and curr_x < center_line_x):
-        person.counted = True
         person.crossed_direction = "right_to_left"
 
         # デバッグモードで画像を保存
@@ -538,12 +535,11 @@ def process_frame_callback(request):
 
         # ラインを横切った人をカウント
         for person in active_people:
-            # 少なくとも2フレーム以上の軌跡がある、かつ、まだカウントされていない人物が対象
-            if len(person.trajectory) >= 2 and not person.counted:
+            # 少なくとも2フレーム以上の軌跡がある人物が対象
+            if len(person.trajectory) >= 2:
                 direction = check_line_crossing(person, center_line_x, frame_copy)
                 if direction:
                     counter.update(direction)
-                    person.counted = True
                     print(f"Person ID {person.id} crossed line: {direction}")
 
         # 古いトラッキング対象を削除 (last_seen が TRACKING_TIMEOUT を超えたもの)

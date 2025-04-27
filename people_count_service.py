@@ -17,7 +17,6 @@ class Person:
         Person.next_id += 1
         self.box = box  # [x, y, w, h] 形式
         self.trajectory = [self.get_center()]
-        self.counted = False
         self.first_seen = time.time()
         self.last_seen = time.time()
         self.crossed_direction = None
@@ -344,7 +343,7 @@ class PeopleTracker:
 
     def check_line_crossing(self, person, center_line_x):
         """中央ラインを横切ったかチェック"""
-        if len(person.trajectory) < 2 or person.counted:
+        if len(person.trajectory) < 2:
             return None
 
         prev_x = person.trajectory[-2][0]
@@ -352,13 +351,11 @@ class PeopleTracker:
 
         # 左→右: 中央線を未満→以上で通過
         if prev_x < center_line_x and curr_x >= center_line_x:
-            person.counted = True
             person.crossed_direction = "left_to_right"
             return "left_to_right"
 
         # 右→左: 中央線を以上→未満で通過
         elif prev_x >= center_line_x and curr_x < center_line_x:
-            person.counted = True
             person.crossed_direction = "right_to_left"
             return "right_to_left"
 
@@ -445,7 +442,7 @@ class PeopleTracker:
                 # ラインを横切った人をカウント
                 cross_count = 0
                 for person in self.active_people:
-                    if len(person.trajectory) >= 2 and not person.counted:
+                    if len(person.trajectory) >= 2:
                         direction = self.check_line_crossing(person, center_line_x)
                         if direction:
                             self.counter.update(direction)
