@@ -10,10 +10,7 @@ import numpy as np
 
 from picamera2 import MappedArray, Picamera2
 from picamera2.devices import IMX500
-from picamera2.devices.imx500 import (NetworkIntrinsics,
-                                      postprocess_nanodet_detection)
-
-# ======= 設定パラメータ（必要に応じて変更） =======
+from picamera2.devices.imx500 import (NetworkIntrinsics, postprocess_nanodet_detection)
 # モデル設定
 MODEL_PATH = "/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk"
 DETECTION_THRESHOLD = 0.55  # 検出信頼度の閾値

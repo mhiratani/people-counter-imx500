@@ -9,8 +9,7 @@ from scipy.optimize import linear_sum_assignment    # scipyの線形割当アル
 
 from picamera2 import MappedArray, Picamera2
 from picamera2.devices import IMX500
-from picamera2.devices.imx500 import (NetworkIntrinsics,
-                                      postprocess_nanodet_detection)
+from picamera2.devices.imx500 import (NetworkIntrinsics, postprocess_nanodet_detection)
 from picamera2.devices.imx500.postprocess import scale_boxes
 
 import modules
@@ -447,7 +446,7 @@ def check_line_crossing(person, center_line_x, frame=None):
 
         # デバッグモードで画像を保存
         if DEBUG_MODE and frame is not None:
-            modules.ssave_debug_image(frame, person, center_line_x, "right_to_left", counter.debug_images_dir, counter.output_prefix)
+            modules.save_debug_image(frame, person, center_line_x, "right_to_left", counter.debug_images_dir, counter.output_prefix)
 
         return "right_to_left"
 
