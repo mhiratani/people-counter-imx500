@@ -5,7 +5,7 @@
   "MAX_DETECTIONS": 30,
   "TRACKING_TIMEOUT": 5.0,
   "COUNTING_INTERVAL": 60,
-  "OUTPUT_DIR": "people_count_data",
+  "OUTPUT_DIR": "people-count-data",
   "DEBUG_MODE": true,
   "DEBUG_IMAGES_SUBDIR_NAME": "debug_images",
   "RTSP_SERVER_URL": "rtsp://localhost",
