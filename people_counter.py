@@ -366,6 +366,9 @@ def process_frame_callback(request):
 if __name__ == "__main__":
     # 出力ディレクトリの作成
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d")
+    DATE_DIR = os.path.join(OUTPUT_DIR, timestamp)
+    os.makedirs(DATE_DIR, exist_ok=True)
 
     # IMX500の初期化
     imx500 = IMX500(MODEL_PATH)

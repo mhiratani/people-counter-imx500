@@ -161,7 +161,8 @@ class PeopleTracker:
         
         # ディレクトリの作成
         os.makedirs(self.output_dir, exist_ok=True)
-        
+        timestamp = datetime.now().strftime("%Y-%m-%d")
+        os.makedirs(os.path.join(self.output_dir, timestamp), exist_ok=True)
         # カウンターの初期化
         self.counter = PeopleCounter(
             self.start_time, 
