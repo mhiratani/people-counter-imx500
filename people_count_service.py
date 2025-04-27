@@ -182,7 +182,7 @@ class PeopleTracker:
         # 出力ファイル名のプレフィックス(カメラ名はcamera_name.jsonから取得)
         # -----------------------------------------------------------
 
-        self.debug_mode = self.camera_name.get('DEBUG_MODE', 'False')
+        self.debug_mode = str(self.camera_name.get('DEBUG_MODE', 'False')).lower() == 'true'
         # -----------------------------------------------------
         # デバッグモードのオン/オフ - アクティブな人物を標準出力で描画
         # -----------------------------------------------------

@@ -77,7 +77,7 @@ COUNTING_INTERVAL = config.get('COUNTING_INTERVAL', 60)     # カウントデー
 OUTPUT_DIR = config.get('OUTPUT_DIR', 'people_count_data')  # データ保存ディレクトリ
 OUTPUT_PREFIX = camera_name.get('CAMERA_NAME', 'cameraA')   # 出力ファイル名のプレフィックス(カメラ名はcamera_name.jsonから取得)
 
-DEBUG_MODE = config.get('DEBUG_MODE', 'False')              # デバッグモードのオン/オフ
+DEBUG_MODE = str(config.get('DEBUG_MODE', 'False')).lower() == 'true'    # デバッグモードのオン/オフ
 DEBUG_IMAGES_SUBDIR_NAME = config.get('DEBUG_IMAGES_SUBDIR_NAME', 'debug_images')
                                                            # デバッグディレクトリの名前
 # デバッグディレクトリを出力ディレクトリの配下に定義ディレクトリの名前
