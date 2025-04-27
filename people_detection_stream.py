@@ -251,7 +251,6 @@ def process_frame_callback(request):
                 output_dir = os.path.join(OUTPUT_DIR, datestamp)
                 modules.save_image_at_startup(m.array, center_line_x, output_dir)
                 process_frame_callback.image_saved = True
-                print("起動時の画像を保存しました")
 
         # メタデータを取得
         metadata = request.get_metadata()

@@ -41,6 +41,9 @@ def save_debug_image(frame, person, center_line_x, direction, debug_images_dir, 
 def save_image_at_startup(frame, center_line_x, output_dir):
     """起動時に画像を保存する関数"""
     try:
+        # 出力ディレクトリが存在しない場合は作成する
+        os.makedirs(output_dir, exist_ok=True)
+
         # 画像にラインを描画
         debug_frame = frame.copy()
 
