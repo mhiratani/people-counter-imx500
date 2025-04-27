@@ -10,8 +10,7 @@ import queue
 
 from picamera2 import MappedArray, Picamera2
 from picamera2.devices import IMX500
-from picamera2.devices.imx500 import (NetworkIntrinsics,
-                                      postprocess_nanodet_detection)
+from picamera2.devices.imx500 import (NetworkIntrinsics, postprocess_nanodet_detection)
 from picamera2.devices.imx500.postprocess import scale_boxes
 
 
@@ -96,7 +95,7 @@ class Detection:
 async def websocket_manager():
     """WebSocket接続を管理し、切断されたら再接続を試みるタスク"""
     global ws_connection
-    reconnect_delay = 5  # 再接続待ち時間 (秒)
+    reconnect_delay = 60  # 再接続待ち時間 (秒)
 
     print("WebSocket接続管理タスクを開始")
     while True:
