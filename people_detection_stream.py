@@ -249,7 +249,7 @@ def process_frame_callback(request):
             if not process_frame_callback.image_saved:
                 datestamp = datetime.now().strftime("%Y-%m-%d")
                 output_dir = os.path.join(OUTPUT_DIR, datestamp)
-                modules.save_image_at_startup(m.array, center_line_x, output_dir)
+                modules.save_image_at_startup(m.array, center_line_x, output_dir, OUTPUT_PREFIX)
                 process_frame_callback.image_saved = True
 
         # メタデータを取得
