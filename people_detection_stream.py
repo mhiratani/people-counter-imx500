@@ -13,6 +13,11 @@ from picamera2.devices import IMX500
 from picamera2.devices.imx500 import (NetworkIntrinsics, postprocess_nanodet_detection)
 from picamera2.devices.imx500.postprocess import scale_boxes
 
+import modules
+
+def init_process_frame_callback():
+    # コールバック関数の属性を初期化
+    process_frame_callback.image_saved = False
 
 # モデル設定
 # https://www.raspberrypi.com/documentation/accessories/ai-camera.html の
@@ -62,6 +67,9 @@ MAX_DETECTIONS = config.get('MAX_DETECTIONS', 30)
 # - 多すぎると計算負荷・誤追跡リスク増、少なすぎると本来追跡すべき人を取りこぼす。
 # - 現場映像の最大混雑人数よりやや余裕を持たせると安定。
 # ----------------------------------------------
+
+OUTPUT_DIR = config.get('OUTPUT_DIR', 'people_count_data')  # データ保存ディレクトリ
+OUTPUT_PREFIX = camera_name_dict.get('CAMERA_NAME', 'cameraA')   # 出力ファイル名のプレフィックス(カメラ名はcamera_name.jsonから取得)
 
 # WebSocket送信用のキューと接続オブジェクト
 # キューの最大サイズを設定してメモリ溢れを防ぐ (例: 10フレーム分のデータ)
@@ -229,10 +237,21 @@ def parse_detections(metadata: dict):
 def process_frame_callback(request):
     """フレームごとの処理を行うコールバック関数 (カメラライブラリから呼ばれる)"""
 
+    if not hasattr(process_frame_callback, 'image_saved'):
+        init_process_frame_callback()
+
     try:
         with MappedArray(request, 'main') as m:
             frame_height, frame_width = m.array.shape[:2]
             center_line_x = frame_width // 2
+
+            # 起動時の画像を一度だけ保存
+            if not process_frame_callback.image_saved:
+                datestamp = datetime.now().strftime("%Y-%m-%d")
+                output_dir = os.path.join(OUTPUT_DIR, datestamp)
+                modules.save_image_at_startup(m.array, center_line_x, output_dir)
+                process_frame_callback.image_saved = True
+                print("起動時の画像を保存しました")
 
         # メタデータを取得
         metadata = request.get_metadata()
