@@ -8,7 +8,37 @@ from websockets.asyncio.server import serve
 import websockets
 from scipy.optimize import linear_sum_assignment
 import traceback
-import matplotlib.pyplot as plt
+import numpy as np
+
+def print_x_axis_line(center_line_x, people_centers_x, width, scale=4):
+    """
+    x軸上のマーキングを圧縮表示します。
+
+    Args:
+        center_line_x (int): 中心線のx座標（元のスケール, 例：ピクセル単位）
+        people_centers_x (list of int): 各人物の中心x座標リスト（元のスケール, ピクセル）
+        width (int): 描画範囲の幅（元のスケール, ピクセル）
+        scale (int): 圧縮度合い（例：4なら1/4スケールで描画）
+
+    出力例:
+        width=80, scale=4なら横幅は21文字('-'ベース)で
+        ('-', '+', '0', '1', '2'...)等が圧縮された位置に表示される。
+    """
+    draw_width = width // scale + 1  # 圧縮して表示する幅
+    line = ['-' for _ in range(draw_width)]
+
+    center_line_pos = int(center_line_x // scale)
+    if 0 <= center_line_pos < draw_width:
+        line[center_line_pos] = '+'
+
+    for idx, person_x in enumerate(people_centers_x):
+        pos = int(person_x // scale)
+        if 0 <= pos < draw_width:
+            # 1桁分だけ番号を入れる（10人以上になるとずれるので要注意！）
+            line[pos] = str(idx % 10)
+
+    print(''.join(line))
+
 class Person:
     next_id = 0
 
@@ -27,7 +57,7 @@ class Person:
             print(f"[ERROR] get_center: boxの要素数が4ではありません: {self.box}")
             raise ValueError("Box の要素数が4つでありません")
         x, y, w, h = self.box
-        return [(x + w)/2, (y + h)/2]
+        return [x + w / 2, y + h / 2]
 
     def update(self, box):
         """新しい検出結果で人物の情報を更新"""
@@ -152,6 +182,11 @@ class PeopleTracker:
         # 出力ファイル名のプレフィックス(カメラ名はcamera_name.jsonから取得)
         # -----------------------------------------------------------
 
+        self.debug_mode = self.camera_name.get('DEBUG_MODE', 'False')
+        # -----------------------------------------------------
+        # デバッグモードのオン/オフ - アクティブな人物を標準出力で描画
+        # -----------------------------------------------------
+
         self.log_interval = 5  # ログ出力間隔（秒）
         
         # 状態の初期化
@@ -163,12 +198,14 @@ class PeopleTracker:
         os.makedirs(self.output_dir, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d")
         os.makedirs(os.path.join(self.output_dir, timestamp), exist_ok=True)
+
         # カウンターの初期化
         self.counter = PeopleCounter(
             self.start_time, 
             self.output_dir, 
             self.output_prefix,
-            self.counting_interval
+            self.counting_interval,
+            self.debug_mode
         )
         
         # キューの初期化
@@ -437,22 +474,26 @@ class PeopleTracker:
                 self.active_people = self.track_people(detections, self.active_people)
                 track_time = time.time() - start_time
                 
-                # print(f"[Worker] 人物追跡を更新しました（{track_time:.4f}秒）。更新前: {previous_count}, 更新後: {len(self.active_people)}")
-                # print(f"[Worker] アクティブな人物ID: {[p.id for p in self.active_people]}")
-                
-                # ラインを横切った人をカウント
-                cross_count = 0
+                # フレーム内すべての人物のx座標を集める
+                people_centers_x = []
                 for person in self.active_people:
+                    center_x, center_y = person.trajectory[-1]
+                    people_centers_x.append(center_x)  # デバッグ用 x座標だけ集める
+
+                    # print(f"[DEBUG] 人物ID {person.id}: box={person.box}, trajectory(last2)={person.trajectory[-2:]}")
+                    # 少なくとも2フレーム以上の軌跡がある人物が対象
                     if len(person.trajectory) >= 2:
                         direction = self.check_line_crossing(person, center_line_x)
+                        # print(f"[Worker] 人物ID {person.id} のライン判定")
+                        # print(f"[Worker] 軌跡: {person.trajectory[-2:]} (最後の2点を表示)")
+                        # print(f"[DEBUG] 直近2点のcenter_line_xまでの距離: {[abs(xy[0] - center_line_x) for xy in person.trajectory[-2:]]}")
                         if direction:
                             self.counter.update(direction)
-                            cross_count += 1
-                            print(f"[Worker] 人物ID {person.id} がラインを横断: {direction}")
-                            print(f"[Worker] 軌跡: {person.trajectory[-2:]} (最後の2点を表示)")
-                
-                # 標準出力で描画
-                self.live_plot_example(center_line_x, image_width=640, image_height=480)
+                            print(f"Person ID {person.id} crossed line: {direction}")
+                        else:
+                            # print(f"[DEBUG] {person.id} はまだ横断していません")
+                            pass
+
                 # 古いトラッキング対象を削除
                 current_time = time.time()
                 before_cleanup = len(self.active_people)
@@ -465,7 +506,11 @@ class PeopleTracker:
                 
                 # ステータス表示
                 self.print_status()
-                
+
+                if self.debug_mode:
+                    # 全人物分の位置とラインをまとめて横棒で可視化
+                    print_x_axis_line(center_line_x, people_centers_x, 640, 4)
+
                 # データ保存
                 save_start = time.time()
                 self.counter.save_to_json()
@@ -473,7 +518,7 @@ class PeopleTracker:
                 # print(f"[Worker] データをJSONに保存しました（{save_time:.4f}秒）")
                 
                 # 処理完了
-                print("-" * 50)
+                # print("-" * 50)
                 
             except Exception as e:
                 print(f"[Worker] tensor_workerでエラーが発生: {e}")

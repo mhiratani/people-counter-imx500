@@ -14,8 +14,6 @@ from picamera2.devices.imx500 import (NetworkIntrinsics,
 from picamera2.devices.imx500.postprocess import scale_boxes
 
 import modules
-# 画像保存用
-import cv2
 
 # モデル設定
 # https://www.raspberrypi.com/documentation/accessories/ai-camera.html の
@@ -483,7 +481,7 @@ def process_frame_callback(request):
         for person in active_people:
             # 少なくとも2フレーム以上の軌跡がある人物が対象
             if len(person.trajectory) >= 2:
-                direction = check_line_crossing(person, center_line_x)
+                direction = check_line_crossing(person, center_line_x, frame_copy)
                 print(f"[Worker] 人物ID {person.id} のライン判定")
                 print(f"[Worker] 軌跡: {person.trajectory[-2:]} (最後の2点を表示)")
                 distances = [abs(xy[0] - center_line_x) for xy in person.trajectory[-2:]]
