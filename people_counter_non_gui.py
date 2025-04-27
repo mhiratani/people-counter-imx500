@@ -486,11 +486,16 @@ def process_frame_callback(request):
         for person in active_people:
             # 少なくとも2フレーム以上の軌跡がある、かつ、まだカウントされていない人物が対象
             if len(person.trajectory) >= 2 and not person.counted:
-                direction = check_line_crossing(person, center_line_x, frame_copy)
+                direction = check_line_crossing(person, center_line_x)
+                print(f"[Worker] 人物ID {person.id} のライン判定")
+                print(f"[Worker] 軌跡: {person.trajectory[-2:]} (最後の2点を表示)")
+                distances = [abs(xy[0] - center_line_x) for xy in person.trajectory[-2:]]
+                print(f"[DEBUG] 直近2点のcenter_line_xまでの距離: {distances}")
                 if direction:
                     counter.update(direction)
-                    person.counted = True
                     print(f"Person ID {person.id} crossed line: {direction}")
+                else:
+                    print(f"[DEBUG] {person.id} はまだ横断していません")
 
         # 古いトラッキング対象を削除 (last_seen が TRACKING_TIMEOUT を超えたもの)
         current_time = time.time()
