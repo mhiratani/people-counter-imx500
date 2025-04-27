@@ -6,7 +6,7 @@
   "TRACKING_TIMEOUT": 5.0,
   "COUNTING_INTERVAL": 60,
   "OUTPUT_DIR": "people_count_data",
-  "DEBUG_MODE": false,
+  "DEBUG_MODE": true,
   "DEBUG_IMAGES_SUBDIR_NAME": "debug_images",
   "RTSP_SERVER_URL": "rtsp://localhost",
   "RTSP_SERVER_PORT": 8554,
