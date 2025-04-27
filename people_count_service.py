@@ -69,7 +69,7 @@ class Person:
 
 
 class PeopleCounter:
-    def __init__(self, start_time, output_dir, output_prefix, counting_interval=60):
+    def __init__(self, start_time, output_dir, output_prefix, counting_interval, debug_mode):
         self.right_to_left = 0  # 右から左へ移動（期間カウント）
         self.left_to_right = 0  # 左から右へ移動（期間カウント）
         self.total_right_to_left = 0  # 累積カウント
@@ -79,6 +79,7 @@ class PeopleCounter:
         self.output_dir = output_dir
         self.output_prefix = output_prefix
         self.counting_interval = counting_interval
+        self.debug_mode = debug_mode
 
     def update(self, direction):
         """方向に基づいてカウンターを更新"""
@@ -182,7 +183,7 @@ class PeopleTracker:
         # 出力ファイル名のプレフィックス(カメラ名はcamera_name.jsonから取得)
         # -----------------------------------------------------------
 
-        self.debug_mode = str(self.camera_name.get('DEBUG_MODE', 'False')).lower() == 'true'
+        self.debug_mode = str(self.config.get('DEBUG_MODE', 'False')).lower() == 'true'
         # -----------------------------------------------------
         # デバッグモードのオン/オフ - アクティブな人物を標準出力で描画
         # -----------------------------------------------------
@@ -196,8 +197,9 @@ class PeopleTracker:
         
         # ディレクトリの作成
         os.makedirs(self.output_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y-%m-%d")
-        os.makedirs(os.path.join(self.output_dir, timestamp), exist_ok=True)
+        datestamp = datetime.now().strftime("%Y-%m-%d")
+        self.output_dir = os.path.join(self.output_dir, datestamp)
+        os.makedirs(self.output_dir, exist_ok=True)
 
         # カウンターの初期化
         self.counter = PeopleCounter(
