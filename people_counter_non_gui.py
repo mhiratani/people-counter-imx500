@@ -467,7 +467,9 @@ def process_frame_callback(request):
 
             # 起動時の画像を一度だけ保存
             if not process_frame_callback.image_saved:
-                modules.save_image_at_startup(m.array, center_line_x, counter.output_dir, counter.output_prefix)
+                datestamp = datetime.now().strftime("%Y-%m-%d")
+                output_dir = os.path.join(OUTPUT_DIR, datestamp)
+                modules.save_image_at_startup(m.array, center_line_x, output_dir, OUTPUT_PREFIX)
                 process_frame_callback.image_saved = True
 
             # デバッグモードの場合、フレーム画像をコピー (check_line_crossingに渡すため)
