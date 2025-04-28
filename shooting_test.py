@@ -52,7 +52,7 @@ OUTPUT_PREFIX = camera_name_config.get('CAMERA_NAME', 'cameraA')
 def main():
     """
     スクリプトのメイン処理:
-    カメラを初期化し、起動時の画像を1枚保存し、S3にアップロードして終了する。
+    カメラを初期化し、AIモデル入力サイズの画像を1枚保存し、S3にアップロードして終了する。
     """
     picam2 = None
     imx500 = None
@@ -89,45 +89,60 @@ def main():
         print("IMX500 AIカメラモジュールを初期化中...")
         imx500 = IMX500(MODEL_PATH)
 
-        # Intrinsicsの確認 (オブジェクト検出用モデルであることを確認)
+        # AIモデルの入力サイズを取得
         intrinsics = imx500.network_intrinsics
         if not intrinsics or intrinsics.task != "object detection":
              print("警告: 指定されたモデルはオブジェクト検出タスク用ではない可能性があります。", file=sys.stderr)
+             # AI入力サイズが取得できない可能性があるので確認
+             ai_input_size = (320, 320) # デフォルト値またはエラー処理が必要
+             print(f"AIモデル入力サイズが検出できませんでした。デフォルト値 {ai_input_size} を使用します。")
+        else:
+             ai_input_size = intrinsics.network_input_size
+             if not ai_input_size:
+                  ai_input_size = (320, 320) # 取得できない場合のフォールバック
+                  print(f"AIモデル入力サイズが Intrinsics から取得できませんでした。デフォルト値 {ai_input_size} を使用します。")
+             else:
+                print(f"AIモデル入力サイズ: {ai_input_size}")
 
         # Picamera2の初期化
         print("カメラを初期化中...")
-        # capture_array で画像データを直接取得するための設定
-        # 'main'ストリームでXRGB8888フォーマットを使用
         picam2 = Picamera2(imx500.camera_num)
-        # 撮影のみのため、プレビュー設定はシンプルに
-        config = picam2.create_still_configuration(main={"format": "XRGB8888"})
-        imx500.show_network_fw_progress_bar()
+
+        # AIモデル入力サイズの画像をキャプチャするために、loresストリームを設定
+        # mainストリームも必要なので、小さめに設定
+        # create_preview_configuration を使用して lores ストリームのサイズを指定
+        config = picam2.create_preview_configuration(
+             main={"size": (640, 480)}, # mainストリームは小さめに
+             lores={"size": ai_input_size, "format": "XRGB8888"} # loresストリームをAI入力サイズに設定
+             # controls={"FrameRate": intrinsics.inference_rate} # 必要に応じてフレームレート設定を追加
+             )
+
         # カメラの設定と起動
         picam2.configure(config)
         picam2.start()
 
         # カメラセンサーと自動設定(AWB, AE等)が落ち着くまで少し待機
         time.sleep(1)
-        print("カメラ起動完了。最初のフレームを取得します。")
+        print(f"カメラ起動完了。AI入力サイズ ({ai_input_size}) のフレームを取得します。")
 
-        # 最初のフレームを取得
-        # capture_array を使用して直接 NumPy array として取得
-        image_array = picam2.capture_array('main')
+        # AI入力サイズのフレームを取得 (loresストリームからキャプチャ)
+        image_array = picam2.capture_array('lores') # <-- loresストリームからキャプチャ
 
-        # 取得した画像の情報を基に中心線を計算 (save_image_at_startup が利用する可能性を考慮)
+        # 取得した画像の情報を基に中心線を計算 (AI入力サイズ基準)
         frame_height, frame_width = image_array.shape[:2]
         center_line_x = frame_width // 2
-        print(f"フレームサイズ: {frame_width}x{frame_height}, 中心線X座標: {center_line_x}")
+        print(f"キャプチャフレームサイズ (AI入力サイズ): {frame_width}x{frame_height}, 中心線X座標: {center_line_x}")
+
 
         # 取得した画像をローカルに保存
         print("起動時画像をローカルに保存しています...")
         image_filename = modules.save_image_at_startup(image_array, center_line_x, OUTPUT_DIR, OUTPUT_PREFIX)
-        print(f"起動時画像をローカルに保存しました: {local_image_path}")
+        print(f"起動時画像をローカルに保存しました: {image_filename}")
 
         # ローカルに保存した画像をS3にアップロード
         print(f"画像をS3バケット '{bucket_name}' にアップロードしています...")
         s3_object_key = f"{S3_PREFIX}/{image_filename}" # S3上のオブジェクトキー
-        s3_client.upload_file(local_image_path, bucket_name, s3_object_key)
+        s3_client.upload_file(image_filename, bucket_name, s3_object_key)
         print(f"画像をS3にアップロードしました: s3://{bucket_name}/{s3_object_key}")
 
     except (NoCredentialsError, PartialCredentialsError):
@@ -154,13 +169,6 @@ def main():
                 print("カメラを停止し、閉じました。")
             except Exception as e:
                 print(f"カメラ停止/解放エラー: {e}", file=sys.stderr)
-
-        if imx500 is not None:
-            try:
-                imx500.close()
-                print("IMX500モジュールを閉じました。")
-            except Exception as e:
-                print(f"IMX500解放エラー: {e}", file=sys.stderr)
 
         # ローカルに保存した画像を削除する
         if local_image_path and os.path.exists(local_image_path):
