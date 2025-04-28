@@ -695,9 +695,6 @@ if __name__ == "__main__":
                 picam2.stop()
                 picam2.close() # カメラを閉じる
                 print("カメラを停止しました")
-            if 'imx500' in locals() and imx500: # imx500が初期化されているか確認
-                imx500.close() # AIモジュールを閉じる
-                print("IMX500モジュールを閉じました")
 
             if 'ffmpeg_proc' in locals() and ffmpeg_proc:
                 try:
