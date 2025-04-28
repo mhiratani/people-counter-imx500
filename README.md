@@ -238,7 +238,6 @@ sudo systemctl restart ssh
 AWS_ACCESS_KEY_ID       = XXXXXXXXXXXXXXXXXXXXX
 AWS_SECRET_ACCESS_KEY   = xyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzz
 AWS_REGION              = ap-northeast-1
-LOCAL_DIRECTORY         = /home/change_here_user_name/people_counter_imx500/people_count_data
 S3_BUCKET_NAME          = plese-change-here-bucket-name
 S3_PREFIX               = this is option
 DELETE_AFTER_UPLOAD     = true(アップロード後削除) or false(アップロード後削除しない)

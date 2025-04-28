@@ -1,11 +1,16 @@
 import os
 import boto3
+import json
 from botocore.exceptions import ClientError
 from datetime import datetime
 from dotenv import load_dotenv
 
 # .envファイルから環境変数を読み込む
 load_dotenv()
+
+def load_config(path):
+    with open(path, 'r') as f:
+        return json.load(f)
 
 def upload_directory_to_s3(local_directory, bucket_name, s3_prefix='', delete_after_upload=False):
     """
@@ -88,10 +93,12 @@ def upload_directory_to_s3(local_directory, bucket_name, s3_prefix='', delete_af
 
 
 if __name__ == "__main__":
-    LOCAL_DIRECTORY = os.getenv('LOCAL_DIRECTORY')
+    script_dir = os.path.dirname(os.path.abspath(__file__)) # カレントディレクトリの取得
+    config_path = os.path.join(script_dir, "config.json")   # カレントに"config.json"がある前提
+    up_load_dir = load_config(config_path)['OUTPUT_DIR']    # S3にアップロードするディレクトリの特定
     BUCKET_NAME = os.getenv('S3_BUCKET_NAME')
     DELETE_AFTER_UPLOAD = os.getenv('DELETE_AFTER_UPLOAD', 'false').lower() == 'true'
     S3_PREFIX = os.getenv('S3_PREFIX', '')  # デフォルトは空文字
 
     # ディレクトリをアップロード
-    upload_directory_to_s3(LOCAL_DIRECTORY, BUCKET_NAME, S3_PREFIX, DELETE_AFTER_UPLOAD)
+    upload_directory_to_s3(up_load_dir, BUCKET_NAME, S3_PREFIX, DELETE_AFTER_UPLOAD)

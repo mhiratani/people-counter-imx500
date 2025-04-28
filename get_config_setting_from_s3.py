@@ -14,7 +14,6 @@ def download_config_from_s3(bucket, key, filename):
     s3.download_file(bucket, key, filename)
 
 if __name__ == "__main__":
-    LOCAL_DIRECTORY = os.getenv('LOCAL_DIRECTORY', '.')
     BUCKET_NAME = os.getenv('S3_BUCKET_NAME')
 
     # camera_name.config(JSON)を同ディレクトリから読む
@@ -24,6 +23,6 @@ if __name__ == "__main__":
 
     # S3キー（ファイル名）をカメラ名に基づき決定
     s3_key = f"settings/{camera_name}.json"
-    config_local_path = os.path.join(LOCAL_DIRECTORY, "config.json")
+    config_local_path = os.path.join(script_dir, "config.json")
     download_config_from_s3(BUCKET_NAME, s3_key, config_local_path)
     print(f"S3({s3_key}) → {config_local_path} にダウンロード完了")
