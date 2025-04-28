@@ -90,19 +90,29 @@ def main():
         imx500 = IMX500(MODEL_PATH)
 
         # AIモデルの入力サイズを取得
-        intrinsics = imx500.network_intrinsics
-        if not intrinsics or intrinsics.task != "object detection":
+        # intrinsics オブジェクトからではなく、imx500 オブジェクトから直接取得を試みる
+        try:
+            # network_input_width/height 属性が存在するか試す
+            ai_input_width = imx500.network_input_width
+            ai_input_height = imx500.network_input_height
+            ai_input_size = (ai_input_width, ai_input_height)
+            print(f"AIモデル入力サイズをIMX500オブジェクトから取得しました: {ai_input_size}")
+        except AttributeError:
+            # 属性が存在しない場合、NetworkIntrinsics から取得できるか試す (前のエラーから期待薄だが念のため)
+            intrinsics = imx500.network_intrinsics
+            try:
+                 # NetworkIntrinsics に network_input_size 属性があれば取得
+                 ai_input_size = intrinsics.network_input_size
+                 print(f"AIモデル入力サイズをIntrinsicsから取得しました (フォールバック): {ai_input_size}")
+            except AttributeError:
+                 # どちらからも取得できない場合、デフォルト値を使用
+                 ai_input_size = (320, 320) # 一般的なSSDモデルのサイズ
+                 print(f"警告: AIモデル入力サイズをIMX500またはIntrinsicsから取得できませんでした。デフォルト値 {ai_input_size} を使用します。", file=sys.stderr)
+
+        # モデルのタスクタイプを確認 (network_input_sizeの取得とは分離)
+        if intrinsics is None or intrinsics.task != "object detection":
              print("警告: 指定されたモデルはオブジェクト検出タスク用ではない可能性があります。", file=sys.stderr)
-             # AI入力サイズが取得できない可能性があるので確認
-             ai_input_size = (320, 320) # デフォルト値またはエラー処理が必要
-             print(f"AIモデル入力サイズが検出できませんでした。デフォルト値 {ai_input_size} を使用します。")
-        else:
-             ai_input_size = intrinsics.network_input_size
-             if not ai_input_size:
-                  ai_input_size = (320, 320) # 取得できない場合のフォールバック
-                  print(f"AIモデル入力サイズが Intrinsics から取得できませんでした。デフォルト値 {ai_input_size} を使用します。")
-             else:
-                print(f"AIモデル入力サイズ: {ai_input_size}")
+
 
         # Picamera2の初期化
         print("カメラを初期化中...")
