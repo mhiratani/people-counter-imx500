@@ -59,5 +59,6 @@ def save_image_at_startup(frame, center_line_x, output_dir, camera_name):
         filename = os.path.join(output_dir, f"{camera_name}_{timestamp}_startupimage.jpg")
         cv2.imwrite(filename, debug_frame)
         print(f"起動時に画像を保存しました: {filename}")
+        return filename
     except Exception as e:
         print(f"起動時に画像を保存する関数の実行エラー: {e}")
