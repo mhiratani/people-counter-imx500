@@ -69,7 +69,7 @@ class Person:
 
 
 class PeopleCounter:
-    def __init__(self, start_time, output_dir, output_prefix, counting_interval, debug_mode):
+    def __init__(self, start_time, output_dir, counting_interval, debug_mode):
         self.right_to_left = 0  # 右から左へ移動（期間カウント）
         self.left_to_right = 0  # 左から右へ移動（期間カウント）
         self.total_right_to_left = 0  # 累積カウント
@@ -77,7 +77,6 @@ class PeopleCounter:
         self.start_time = start_time
         self.last_save_time = start_time
         self.output_dir = output_dir
-        self.output_prefix = output_prefix
         self.counting_interval = counting_interval
         self.debug_mode = debug_mode
 
@@ -104,7 +103,7 @@ class PeopleCounter:
             "left_to_right": self.total_left_to_right,
         }
 
-    def save_to_json(self):
+    def save_to_json(self, camera_id):
         """指定間隔でカウントデータをJSONファイルに保存"""
         current_time = time.time()
         # 指定間隔経過したらデータを保存
@@ -118,7 +117,7 @@ class PeopleCounter:
             }
 
             # ファイルパスを正しく構築
-            filename = os.path.join(self.output_dir, f"{self.output_prefix}_{timestamp}.json")
+            filename = os.path.join(self.output_dir, f"{camera_id}_{timestamp}.json")
             try:
                 with open(filename, 'w') as f:
                     json.dump(data, f, indent=4)
@@ -178,11 +177,6 @@ class PeopleTracker:
         # データ保存ディレクトリ
         # ---------------------------
 
-        self.output_prefix = self.camera_name.get('CAMERA_NAME', 'cameraA')
-        # -----------------------------------------------------------
-        # 出力ファイル名のプレフィックス(カメラ名はcamera_name.jsonから取得)
-        # -----------------------------------------------------------
-
         self.debug_mode = str(self.config.get('DEBUG_MODE', 'False')).lower() == 'true'
         # -----------------------------------------------------
         # デバッグモードのオン/オフ - アクティブな人物を標準出力で描画
@@ -197,6 +191,7 @@ class PeopleTracker:
         
         # ディレクトリの作成
         os.makedirs(self.output_dir, exist_ok=True)
+        # output_dir配下に実行日のディレクトリを作成
         datestamp = datetime.now().strftime("%Y-%m-%d")
         self.output_dir = os.path.join(self.output_dir, datestamp)
         os.makedirs(self.output_dir, exist_ok=True)
@@ -205,7 +200,6 @@ class PeopleTracker:
         self.counter = PeopleCounter(
             self.start_time, 
             self.output_dir, 
-            self.output_prefix,
             self.counting_interval,
             self.debug_mode
         )
@@ -458,6 +452,7 @@ class PeopleTracker:
                     continue
                 
                 # データ抽出
+                camera_id = packet.get("camera_id")
                 center_line_x = packet.get("center_line_x")
                 detections = packet.get("detections", [])
                 
@@ -515,7 +510,7 @@ class PeopleTracker:
 
                 # データ保存
                 save_start = time.time()
-                self.counter.save_to_json()
+                self.counter.save_to_json(camera_id)
                 save_time = time.time() - save_start
                 # print(f"[Worker] データをJSONに保存しました（{save_time:.4f}秒）")
                 
