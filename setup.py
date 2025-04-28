@@ -7,11 +7,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def input_camera_name():
+    import re
+    pattern = re.compile(r'^camera\w+$')  # 'camera'で始まり、その後は英数字または_が1文字以上
     while True:
-        name = input("カメラ名を英数字・_・-で入力してください: ").strip()
-        if name and all(c.isalnum() or c in "_-" for c in name):
+        name = input("カメラ名を 'camera' で始め、英数字または_で入力してください（例：cameraA1）: ").strip()
+        if pattern.match(name):
             return name
-        print("⚠️ 無効な名前です。")
+        print("⚠️ 無効なお名前です。'camera'で始まり、その後に英数字または_を続けてください。")
 
 def save_camera_name(camera_name, path):
     with open(path, "w") as f:

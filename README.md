@@ -199,6 +199,20 @@ sudo systemctl status people-counter-non-gui
 journalctl -u people-counter-non-gui.service -n 20
 ```
 
+## 初期設定
+```python
+
+# カメラ名の設定
+
+python setup.py
+
+camera で始めてほしい
+camera1_2024-06-01_001.json → OK
+cameraABC_2024-05-15_999.jpg → OK
+cam1_2024-06-01_001.json → NG（頭が“camera”ではない）
+camera-1_2024-06-01_001.json → NG（“-”は\wに含まれない）
+```
+
 ## Note
 
 ### セキュリティ対策
