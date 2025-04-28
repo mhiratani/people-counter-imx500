@@ -25,11 +25,23 @@
 # システムアップデート
 sudo apt update
 sudo apt upgrade -y
+```
 
 # 必要なシステムパッケージのインストール
+1. カメラが付いている側
+
+```bash
 sudo apt install -y python3-pip python3-venv git cmake build-essential \
     libatlas-base-dev libhdf5-dev libhdf5-serial-dev libjpeg-dev \
     libopenjp2-7-dev python3-picamera2 imx500-all
+```
+
+2. 解析専用・カメラを使わない
+
+```bash
+sudo apt install -y python3-pip python3-venv git cmake build-essential \
+    libatlas-base-dev libhdf5-dev libhdf5-serial-dev libjpeg-dev \
+    libopenjp2-7-dev
 ```
 
 ### 2. Python環境構築

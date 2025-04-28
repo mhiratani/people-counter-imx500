@@ -1,10 +1,11 @@
-numpy
-picamera2
-scipy
-#画像保存用cv2
-opencv-python
-# for uploading to S3
-load_dotenv
+# 標準ライブラリ以外の必要パッケージ
 boto3
-# webrtc
-# subprocess  Pythonの標準ライブラリの一部なので、pip install不要
+python-dotenv
+picamera2
+numpy
+scipy
+opencv-python
+websockets
+
+# boto3の依存
+botocore
