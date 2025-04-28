@@ -476,21 +476,29 @@ def process_frame_callback(request):
             frame_copy = None
             if DEBUG_MODE:
                 frame_copy = m.array.copy()
+                # フレーム内すべての人物のx座標を集める
+                people_centers_x = []
 
+        # フレーム内すべての人物のx座標を集める
         # ラインを横切った人をカウント
         for person in active_people:
             # 少なくとも2フレーム以上の軌跡がある人物が対象
             if len(person.trajectory) >= 2:
                 direction = check_line_crossing(person, center_line_x, frame_copy)
-                print(f"[Worker] 人物ID {person.id} のライン判定")
-                print(f"[Worker] 軌跡: {person.trajectory[-2:]} (最後の2点を表示)")
+                # print(f"[Worker] 人物ID {person.id} のライン判定")
+                # print(f"[Worker] 軌跡: {person.trajectory[-2:]} (最後の2点を表示)")
                 distances = [abs(xy[0] - center_line_x) for xy in person.trajectory[-2:]]
                 print(f"[DEBUG] 直近2点のcenter_line_xまでの距離: {distances}")
                 if direction:
                     counter.update(direction)
                     print(f"Person ID {person.id} crossed line: {direction}")
                 else:
-                    print(f"[DEBUG] {person.id} はまだ横断していません")
+                    # print(f"[DEBUG] {person.id} はまだ横断していません")
+                    pass
+
+            if DEBUG_MODE:
+                center_x, center_y = person.trajectory[-1]
+                people_centers_x.append(center_x)  # デバッグ用 x座標だけ集める
 
         # 古いトラッキング対象を削除 (last_seen が TRACKING_TIMEOUT を超えたもの)
         current_time = time.time()
@@ -508,6 +516,10 @@ def process_frame_callback(request):
             print(f"Counts - Total (R->L: {total_counts['right_to_left']}, L->R: {total_counts['left_to_right']})")
             print(f"Next save in: {remaining} seconds")
             print(f"--------------------------------------------------")
+
+        if DEBUG_MODE:
+            # 全人物分の位置とラインをまとめて横棒で可視化
+            modules.print_x_axis_line(center_line_x, people_centers_x, 320, 2)
 
         last_log_time = current_time
 
