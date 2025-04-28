@@ -409,7 +409,7 @@ async def main():
         print("非同期タスク停止完了")
 
         # WebSocket接続を閉じる
-        if ws_connection and not ws_connection.closed:
+        if ws_connection:
             print("WebSocketを閉じています...")
             try:
                 await ws_connection.close()
@@ -417,8 +417,7 @@ async def main():
             except Exception as e:
                  print(f"WebSocketクローズエラー: {e}")
 
-
-        # カメラとIMX500モジュールを閉じる (元のコードと同じ)
+        # カメラとIMX500モジュールを閉じる
         try:
             if 'picam2' in locals() and picam2:
                 picam2.stop()
