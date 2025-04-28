@@ -506,7 +506,7 @@ class PeopleTracker:
 
                 if self.debug_mode:
                     # 全人物分の位置とラインをまとめて横棒で可視化
-                    print_x_axis_line(center_line_x, people_centers_x, 640, 4)
+                    print_x_axis_line(center_line_x, people_centers_x, 320, 2)
 
                 # データ保存
                 save_start = time.time()
