@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 import boto3
 from botocore.exceptions import NoCredentialsError, PartialCredentialsError, ClientError
+import cv2
 
 # python-dotenv を使用して .env ファイルから環境変数を読み込む
 from dotenv import load_dotenv
@@ -131,23 +132,30 @@ def main():
         picam2.configure(config)
         picam2.start()
 
-        # カメラセンサーと自動設定(AWB, AE等)が落ち着くまで少し待機
-        time.sleep(1)
-        print(f"カメラ起動完了。AI入力サイズ ({ai_input_size}) のフレームを取得します。")
-
         # AI入力サイズのフレームを取得 (loresストリームからキャプチャ)
-        image_array = picam2.capture_array('lores') # <-- loresストリームからキャプチャ
+        image_array_yuv = picam2.capture_array('lores') # YUV形式で取得
 
-        # 取得した画像の情報を基に中心線を計算 (AI入力サイズ基準)
-        frame_height, frame_width = image_array.shape[:2]
-        center_line_x = frame_width // 2
+        # YUVデータをBGR形式に変換 (画像ファイル保存やOpenCVでの処理に必要)
+        image_array_bgr = cv2.cvtColor(image_array_yuv, cv2.COLOR_YUV2BGR)
+        print("YUVからBGR形式に変換しました。")
+
+        # 変換後のBGR画像配列からサイズを取得 (AI入力サイズと同じはず)
+        frame_height, frame_width = image_array_bgr.shape[:2]
+        center_line_x = frame_width // 2 # AI入力サイズ基準の中心線X座標
         print(f"キャプチャフレームサイズ (AI入力サイズ): {frame_width}x{frame_height}, 中心線X座標: {center_line_x}")
 
 
-        # 取得した画像をローカルに保存
-        print("起動時画像をローカルに保存しています...")
-        image_filename = modules.save_image_at_startup(image_array, center_line_x, OUTPUT_DIR, OUTPUT_PREFIX)
-        print(f"起動時画像をローカルに保存しました: {image_filename}")
+        # 取得した画像をローカルに保存 (cv2.imwriteを使用)
+        print("AI入力サイズの画像をローカルに保存しています...")
+        timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        # ファイル名にAIサイズを示すサフィックスを追加
+        image_filename = f"{OUTPUT_PREFIX}_{timestamp_str}_{frame_width}x{frame_height}_ai_input.jpg"
+        local_image_path = os.path.join(OUTPUT_DIR, image_filename)
+
+        # OpenCVを使ってBGR画像をJPEGファイルとして保存
+        cv2.imwrite(local_image_path, image_array_bgr) # <-- 直接保存
+        print(f"AI入力サイズの画像をローカルに保存しました: {local_image_path}")
+
 
         # ローカルに保存した画像をS3にアップロード
         print(f"画像をS3バケット '{bucket_name}' にアップロードしています...")
