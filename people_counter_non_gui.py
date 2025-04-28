@@ -184,7 +184,9 @@ class PeopleCounter:
             }
 
             # ファイルパスを正しく構築
-            filename = os.path.join(self.output_dir, f"{self.output_prefix}_{timestamp}.json")
+            datestamp = datetime.now().strftime("%Y-%m-%d")
+            log_dir = os.path.join(self.output_dir, datestamp)
+            filename = os.path.join(log_dir, f"{self.output_prefix}_{timestamp}.json")
             try:
                 with open(filename, 'w') as f:
                     json.dump(data, f, indent=4)
