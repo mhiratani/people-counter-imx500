@@ -100,8 +100,8 @@ def main():
         # 'main'ストリームでXRGB8888フォーマットを使用
         picam2 = Picamera2(imx500.camera_num)
         # 撮影のみのため、プレビュー設定はシンプルに
-        config = picam2.create_still_configuration({"main": {"format": "XRGB8888"}}) # Still configurationを使用
-
+        config = picam2.create_still_configuration(main={"format": "XRGB8888"})
+        imx500.show_network_fw_progress_bar()
         # カメラの設定と起動
         picam2.configure(config)
         picam2.start()
