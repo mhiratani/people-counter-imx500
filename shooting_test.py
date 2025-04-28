@@ -119,24 +119,21 @@ def main():
         print("カメラを初期化中...")
         picam2 = Picamera2(imx500.camera_num)
 
-        # AIモデル入力サイズの画像をキャプチャするために、loresストリームを設定
-        # mainストリームも必要なので、小さめに設定
-        # create_preview_configuration を使用して lores ストリームのサイズを指定
         config = picam2.create_preview_configuration(
-             main={"size": (640, 480)}, # mainストリームは小さめに
-             lores={"size": ai_input_size, "format": "XRGB8888"} # loresストリームをAI入力サイズに設定
-             # controls={"FrameRate": intrinsics.inference_rate} # 必要に応じてフレームレート設定を追加
-             )
+            main={"size": (640, 480)},
+            lores={"size": ai_input_size}  # format指定をやめる、またはYUV420
+        )
 
         # カメラの設定と起動
         picam2.configure(config)
         picam2.start()
 
         # AI入力サイズのフレームを取得 (loresストリームからキャプチャ)
-        image_array_yuv = picam2.capture_array('lores') # YUV形式で取得
+        image_array_yuv = picam2.capture_array('lores')
+        print("YUV shape:", image_array_yuv.shape, "dtype:", image_array_yuv.dtype)
 
         # YUVデータをBGR形式に変換 (画像ファイル保存やOpenCVでの処理に必要)
-        image_array_bgr = cv2.cvtColor(image_array_yuv, cv2.COLOR_YUV2BGR)
+        image_array_bgr = cv2.cvtColor(image_array_yuv, cv2.COLOR_YUV2BGR_I420)
         print("YUVからBGR形式に変換しました。")
 
         # 変換後のBGR画像配列からサイズを取得 (AI入力サイズと同じはず)
@@ -160,7 +157,7 @@ def main():
         # ローカルに保存した画像をS3にアップロード
         print(f"画像をS3バケット '{bucket_name}' にアップロードしています...")
         s3_object_key = f"{S3_PREFIX}/{image_filename}" # S3上のオブジェクトキー
-        s3_client.upload_file(image_filename, bucket_name, s3_object_key)
+        s3_client.upload_file(local_image_path, bucket_name, s3_object_key)
         print(f"画像をS3にアップロードしました: s3://{bucket_name}/{s3_object_key}")
 
     except (NoCredentialsError, PartialCredentialsError):
