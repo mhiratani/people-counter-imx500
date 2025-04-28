@@ -107,7 +107,7 @@ def main():
                  print(f"AIモデル入力サイズをIntrinsicsから取得しました (フォールバック): {ai_input_size}")
             except AttributeError:
                  # どちらからも取得できない場合、デフォルト値を使用
-                 ai_input_size = (320, 320) # 一般的なSSDモデルのサイズ
+                 ai_input_size = (640, 480) # 一般的なSSDモデルのサイズ
                  print(f"警告: AIモデル入力サイズをIMX500またはIntrinsicsから取得できませんでした。デフォルト値 {ai_input_size} を使用します。", file=sys.stderr)
 
         # モデルのタスクタイプを確認 (network_input_sizeの取得とは分離)
@@ -142,17 +142,9 @@ def main():
         print(f"キャプチャフレームサイズ (AI入力サイズ): {frame_width}x{frame_height}, 中心線X座標: {center_line_x}")
 
 
-        # 取得した画像をローカルに保存 (cv2.imwriteを使用)
-        print("AI入力サイズの画像をローカルに保存しています...")
-        timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        # ファイル名にAIサイズを示すサフィックスを追加
-        image_filename = f"{OUTPUT_PREFIX}_{timestamp_str}_{frame_width}x{frame_height}_ai_input.jpg"
+        image_filename = modules.save_image_at_startup(image_array_bgr, center_line_x, OUTPUT_DIR, OUTPUT_PREFIX)
         local_image_path = os.path.join(OUTPUT_DIR, image_filename)
-
-        # OpenCVを使ってBGR画像をJPEGファイルとして保存
-        cv2.imwrite(local_image_path, image_array_bgr) # <-- 直接保存
         print(f"AI入力サイズの画像をローカルに保存しました: {local_image_path}")
-
 
         # ローカルに保存した画像をS3にアップロード
         print(f"画像をS3バケット '{bucket_name}' にアップロードしています...")
