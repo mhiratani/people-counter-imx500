@@ -487,11 +487,10 @@ def process_frame_callback(request):
                 direction = check_line_crossing(person, center_line_x, frame_copy)
                 # print(f"[Worker] 人物ID {person.id} のライン判定")
                 # print(f"[Worker] 軌跡: {person.trajectory[-2:]} (最後の2点を表示)")
-                distances = [abs(xy[0] - center_line_x) for xy in person.trajectory[-2:]]
-                print(f"[DEBUG] 直近2点のcenter_line_xまでの距離: {distances}")
+                # print(f"[DEBUG] 直近2点のcenter_line_xまでの距離: { [abs(xy[0] - center_line_x) for xy in person.trajectory[-2:]] }")
                 if direction:
                     counter.update(direction)
-                    print(f"Person ID {person.id} crossed line: {direction}")
+                    # print(f"Person ID {person.id} crossed line: {direction}")
                 else:
                     # print(f"[DEBUG] {person.id} はまだ横断していません")
                     pass
@@ -519,7 +518,7 @@ def process_frame_callback(request):
 
         if DEBUG_MODE:
             # 全人物分の位置とラインをまとめて横棒で可視化
-            modules.print_x_axis_line(center_line_x, people_centers_x, 320, 2)
+            modules.print_x_axis_line(center_line_x, people_centers_x, 640, 4)
 
         last_log_time = current_time
 
