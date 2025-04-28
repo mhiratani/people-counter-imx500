@@ -1,7 +1,6 @@
 # 標準ライブラリ以外の必要パッケージ
 boto3
 python-dotenv
-picamera2
 numpy
 scipy
 opencv-python
