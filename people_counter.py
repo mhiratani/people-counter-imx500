@@ -14,6 +14,9 @@ from picamera2.devices.imx500.postprocess import scale_boxes
 
 import modules
 
+# ffmpegによるRTSP配信プロセス用
+import subprocess
+
 # 描画設定
 import cv2
 LINE_COLOR = (0, 255, 0) # Green (BGR format for OpenCV)
@@ -98,6 +101,10 @@ LOG_INTERVAL = 5  # ログ出力間隔（秒）
 
 # グローバル変数
 last_log_time = 0
+
+# RTSP配信先URL
+RTSP_SERVER_URL = config.get('RTSP_SERVER_URL',None)
+RTSP_SERVER_PORT = config.get('RTSP_SERVER_PORT','')
 
 def init_process_frame_callback():
     # コールバック関数の属性を初期化
@@ -447,49 +454,6 @@ def check_line_crossing(person, center_line_x, frame=None):
 
     return None
 
-def render_frame(frame, center_line_x, frame_height):
-    # 中央ラインを描画
-    cv2.line(frame.array, (center_line_x, 0), (center_line_x, frame_height), 
-            (255, 255, 0), 2)
-    
-    # 人物の検出ボックスと軌跡を描画
-    for person in active_people:
-        x, y, w, h = person.box
-        
-        # 人物の方向によって色を変える
-        if person.crossed_direction == "left_to_right":
-            color = (0, 255, 0)  # 緑: 左から右
-        elif person.crossed_direction == "right_to_left":
-            color = (0, 0, 255)  # 赤: 右から左
-        else:
-            color = (255, 255, 255)  # 白: まだカウントされていない
-        
-        # 検出ボックスを描画
-        cv2.rectangle(frame.array, (x, y), (x + w, y + h), color, 2)
-        
-        # ID表示
-        cv2.putText(frame.array, f"ID: {person.id}", (x, y - 10), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        
-        # 軌跡を描画
-        if len(person.trajectory) > 1:
-            for i in range(1, len(person.trajectory)):
-                cv2.line(frame.array, person.trajectory[i-1], person.trajectory[i], color, 2)
-    
-    # カウント情報を表示
-    total_counts = counter.get_total_counts()
-    cv2.putText(frame.array, f"right_to_left: {total_counts['right_to_left']}", 
-            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-    cv2.putText(frame.array, f"left_to_right: {total_counts['left_to_right']}", 
-            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
-    # 経過時間表示
-    elapsed = int(time.time() - counter.last_save_time)
-    remaining = COUNTING_INTERVAL - elapsed
-    cv2.putText(frame.array, f"Remaining time: {remaining}sec", 
-                (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-
-
 def process_frame_callback(request):
     """フレームごとの処理を行うコールバック関数"""
     global active_people, counter, last_log_time
@@ -526,6 +490,56 @@ def process_frame_callback(request):
                 modules.save_image_at_startup(m.array, center_line_x, counter.output_dir, counter.output_prefix)
                 process_frame_callback.image_saved = True
 
+            # 中央ラインを描画
+            cv2.line(m.array, (center_line_x, 0), (center_line_x, frame_height), 
+                    (255, 255, 0), 2)
+            
+            # 人物の検出ボックスと軌跡を描画
+            for person in active_people:
+                x, y, w, h = person.box
+                
+                # 人物の方向によって色を変える
+                if person.crossed_direction == "left_to_right":
+                    color = (0, 255, 0)  # 緑: 左から右
+                elif person.crossed_direction == "right_to_left":
+                    color = (0, 0, 255)  # 赤: 右から左
+                else:
+                    color = (255, 255, 255)  # 白: まだカウントされていない
+                
+                # 検出ボックスを描画
+                cv2.rectangle(m.array, (x, y), (x + w, y + h), color, 2)
+                
+                # ID表示
+                cv2.putText(m.array, f"ID: {person.id}", (x, y - 10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                
+                # 軌跡を描画
+                if len(person.trajectory) > 1:
+                    for i in range(1, len(person.trajectory)):
+                        cv2.line(m.array, person.trajectory[i-1], person.trajectory[i], color, 2)
+            
+            # カウント情報を表示
+            total_counts = counter.get_total_counts()
+            cv2.putText(m.array, f"right_to_left: {total_counts['right_to_left']}", 
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.putText(m.array, f"left_to_right: {total_counts['left_to_right']}", 
+                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+            # 経過時間表示
+            elapsed = int(time.time() - counter.last_save_time)
+            remaining = COUNTING_INTERVAL - elapsed
+            cv2.putText(m.array, f"Remaining time: {remaining}sec", 
+                        (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+
+            if RTSP_SERVER_URL:
+                try:
+                    frame_for_rtsp = m.array
+                    if frame_for_rtsp.shape[2] == 4:
+                        frame_for_rtsp = cv2.cvtColor(frame_for_rtsp, cv2.COLOR_BGRA2BGR)
+                    if ffmpeg_proc and ffmpeg_proc.stdin:
+                        ffmpeg_proc.stdin.write(frame_for_rtsp.astype(np.uint8).tobytes())
+                except Exception as e:
+                    print(f"RTSP配信エラー: {e}")
 
         # ラインを横切った人をカウント
         for person in active_people:
@@ -542,7 +556,6 @@ def process_frame_callback(request):
                 else:
                     print(f"[DEBUG] {person.id} はまだ横断していません")
 
-        render_frame(frame, center_line_x, frame_height)
         # 古いトラッキング対象を削除 (last_seen が TRACKING_TIMEOUT を超えたもの)
         current_time = time.time()
         active_people = [p for p in active_people if current_time - p.last_seen < TRACKING_TIMEOUT]
@@ -622,12 +635,45 @@ if __name__ == "__main__":
         # 2段階の初期化
         picam2.configure(config)
         time.sleep(0.5)  # 少し待機
-        picam2.start()  # ヘッドレスモードでスタート
+        # picam2.start()  # ヘッドレスモードでスタート
+        picam2.start(show_preview=True)  # プレビューを表示
         
         if intrinsics.preserve_aspect_ratio:
             imx500.set_auto_aspect_ratio()
             
         print("カメラ起動完了")
+
+        # RTSP配信用 設定値
+        if RTSP_SERVER_URL:
+            FRAME_WIDTH  = config.get('FRAME_WIDTH', 640)   # 環境にあわせ適宜
+            FRAME_HEIGHT = config.get('FRAME_HEIGHT', 480)
+            FRAME_RATE = int(intrinsics.inference_rate) if hasattr(intrinsics, 'inference_rate') else 15
+            RTSP_URL = f"{RTSP_SERVER_URL}:{RTSP_SERVER_PORT}/stream"
+
+            ffmpeg_cmd = [
+                "ffmpeg",
+                "-re",
+                "-f", "rawvideo",
+                "-pix_fmt", "bgr24",
+                "-s", f"{FRAME_WIDTH}x{FRAME_HEIGHT}",
+                "-r", str(FRAME_RATE),
+                "-i", "-",              # 入力：標準入力
+                "-an",                  # 音声なし
+                "-c:v", "libx264",
+                "-preset", "ultrafast", # 低遅延
+                "-tune", "zerolatency",
+                "-f", "rtsp",
+                RTSP_URL
+            ]
+            try:
+                ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+                print("ffmpegによるRTSP配信プロセス起動")
+            except Exception as e:
+                print(f"ffmpeg起動失敗: {e}")
+                sys.exit(1)
+        else:
+            print(f"RTSP_SERVER_URLが未指定のためRTSP配信は行いません")
+
     except Exception as e:
         print(f"カメラ初期化エラーまたはIMX500初期化エラー: {e}")
         import traceback
