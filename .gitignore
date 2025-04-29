@@ -1,2 +1,3 @@
 venv/*
-people_count_data/*
+people-count-data/*
+__pycache__/*
