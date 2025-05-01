@@ -103,7 +103,7 @@ LOG_INTERVAL = 5  # ログ出力間隔（秒）
 last_log_time = 0
 
 # RTSP配信先URL
-RTSP_SERVER_URL = config.get('RTSP_SERVER_URL',None)
+RTSP_SERVER_URL = config.get('RTSP_SERVER_URL','None')
 RTSP_SERVER_PORT = config.get('RTSP_SERVER_PORT','')
 
 def init_process_frame_callback():
@@ -531,7 +531,7 @@ def process_frame_callback(request):
             cv2.putText(m.array, f"Remaining time: {remaining}sec", 
                         (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
-            if RTSP_SERVER_URL:
+            if RTSP_SERVER_URL != 'None':
                 try:
                     frame_for_rtsp = m.array
                     if frame_for_rtsp.shape[2] == 4:
@@ -644,9 +644,9 @@ if __name__ == "__main__":
         print("カメラ起動完了")
 
         # RTSP配信用 設定値
-        if RTSP_SERVER_URL:
-            FRAME_WIDTH  = config.get('FRAME_WIDTH', 640)   # 環境にあわせ適宜
-            FRAME_HEIGHT = config.get('FRAME_HEIGHT', 480)
+        if RTSP_SERVER_URL != 'None':
+            FRAME_WIDTH  = 640
+            FRAME_HEIGHT = 480
             FRAME_RATE = int(intrinsics.inference_rate) if hasattr(intrinsics, 'inference_rate') else 15
             RTSP_URL = f"{RTSP_SERVER_URL}:{RTSP_SERVER_PORT}/stream"
 
