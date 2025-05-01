@@ -19,7 +19,7 @@ if __name__ == "__main__":
     # camera_name.config(JSON)を同ディレクトリから読む
     script_dir = os.path.dirname(os.path.abspath(__file__))
     camera_name_path = os.path.join(script_dir, "camera_name.json")
-    camera_name = load_config(camera_name_path)['camera_name']
+    camera_name = load_config(camera_name_path)['CAMERA_NAME']
 
     # S3キー（ファイル名）をカメラ名に基づき決定
     s3_key = f"settings/{camera_name}.json"
