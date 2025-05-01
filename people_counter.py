@@ -89,6 +89,7 @@ COUNTING_INTERVAL = config.get('COUNTING_INTERVAL', 60)     # カウントデー
 # 出力設定
 OUTPUT_DIR = config.get('OUTPUT_DIR', 'people_count_data')  # データ保存ディレクトリ
 OUTPUT_PREFIX = camera_name.get('CAMERA_NAME', 'cameraA')   # 出力ファイル名のプレフィックス(カメラ名はcamera_name.jsonから取得)
+DATE_DIR = os.path.join(OUTPUT_DIR, datetime.now().strftime("%Y-%m-%d"))
 
 DEBUG_MODE = str(config.get('DEBUG_MODE', 'False')).lower() == 'true'   # デバッグモードのオン/オフ
 DEBUG_IMAGES_SUBDIR_NAME = config.get('DEBUG_IMAGES_SUBDIR_NAME', 'debug_images')
@@ -114,7 +115,7 @@ def init_process_frame_callback():
     active_people = []
     # counterはmainで初期化されるはずだが、念のためNoneチェック
     if counter is None:
-        counter = PeopleCounter(time.time(), OUTPUT_DIR, OUTPUT_PREFIX)
+        counter = PeopleCounter(time.time(), OUTPUT_DIR, OUTPUT_PREFIX, DATE_DIR, DEBUG_IMAGES_DIR)
 
 
 # ======= クラス定義 =======
@@ -153,7 +154,7 @@ class Person:
 
 
 class PeopleCounter:
-    def __init__(self, start_time, output_dir=OUTPUT_DIR, output_prefix=OUTPUT_PREFIX, debug_images_dir=DEBUG_IMAGES_DIR):
+    def __init__(self, start_time, output_dir=OUTPUT_DIR, output_prefix=OUTPUT_PREFIX, date_dir=DATE_DIR, debug_images_dir=DEBUG_IMAGES_DIR):
         self.right_to_left = 0  # 右から左へ移動（期間カウント）
         self.left_to_right = 0  # 左から右へ移動（期間カウント）
         self.total_right_to_left = 0  # 累積カウント
@@ -162,6 +163,7 @@ class PeopleCounter:
         self.last_save_time = start_time
         self.output_dir = output_dir
         self.output_prefix = output_prefix
+        self.date_dir = date_dir
         self.debug_images_dir = debug_images_dir
 
     def update(self, direction):
@@ -201,7 +203,7 @@ class PeopleCounter:
             }
 
             # ファイルパスを正しく構築
-            filename = os.path.join(self.output_dir, f"{self.output_prefix}_{timestamp}.json")
+            filename = os.path.join(self.date_dir, f"{self.output_prefix}_{timestamp}.json")
             try:
                 with open(filename, 'w') as f:
                     json.dump(data, f, indent=4)
@@ -546,15 +548,16 @@ def process_frame_callback(request):
             # 少なくとも2フレーム以上の軌跡がある人物が対象
             if len(person.trajectory) >= 2:
                 direction = check_line_crossing(person, center_line_x, frame)
-                print(f"[Worker] 人物ID {person.id} のライン判定")
-                print(f"[Worker] 軌跡: {person.trajectory[-2:]} (最後の2点を表示)")
-                distances = [abs(xy[0] - center_line_x) for xy in person.trajectory[-2:]]
-                print(f"[DEBUG] 直近2点のcenter_line_xまでの距離: {distances}")
+                # print(f"[DEBUG] 人物ID {person.id} のライン判定")
+                # print(f"[DEBUG] 軌跡: {person.trajectory[-2:]} (最後の2点を表示)")
+                # distances = [abs(xy[0] - center_line_x) for xy in person.trajectory[-2:]]
+                # print(f"[DEBUG] 直近2点のcenter_line_xまでの距離: {distances}")
                 if direction:
                     counter.update(direction)
-                    print(f"Person ID {person.id} crossed line: {direction}")
+                    # print(f"[DEBUG] Person ID {person.id} crossed line: {direction}")
                 else:
-                    print(f"[DEBUG] {person.id} はまだ横断していません")
+                    # print(f"[DEBUG] {person.id} はまだ横断していません")
+                    pass
 
         # 古いトラッキング対象を削除 (last_seen が TRACKING_TIMEOUT を超えたもの)
         current_time = time.time()
@@ -588,8 +591,6 @@ def process_frame_callback(request):
 if __name__ == "__main__":
     # 出力ディレクトリの作成
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y-%m-%d")
-    DATE_DIR = os.path.join(OUTPUT_DIR, timestamp)
     os.makedirs(DATE_DIR, exist_ok=True)
     # デバッグディレクトリの作成
     if DEBUG_MODE:
@@ -683,7 +684,7 @@ if __name__ == "__main__":
     # 人物追跡とカウントの初期化
     active_people = [] # グローバル変数として初期化
     start_time = time.time()
-    counter = PeopleCounter(start_time, OUTPUT_DIR, OUTPUT_PREFIX) # グローバル変数として初期化
+    counter = PeopleCounter(start_time, OUTPUT_DIR, OUTPUT_PREFIX, DATE_DIR, DEBUG_IMAGES_DIR) # グローバル変数として初期化
     last_log_time = start_time
 
     # コールバックを設定
