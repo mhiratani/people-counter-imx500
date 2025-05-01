@@ -2,14 +2,14 @@
 
 ## 概要
 
-本システムは、GUIを準備してないRaspberry Pi とIMX500 AIカメラモジュールを使用した人流カウントシステムです。ここでは人の移動方向を検出してカウントします。cronによるスケジュール運用機能についても記載します。
+本システムは、Raspberry Pi とIMX500 AIカメラモジュールを使用した人流カウントシステムです。ここでは人の移動方向を検出してカウントします。cronによるスケジュール運用機能についても記載します。
 
 ## 機能
 
 - IMX500 AIカメラモジュールによる人物検出
 - 指定ラインを横切る人の方向別カウント
 - JSONファイルへのカウントデータ保存
-- GUIを不要で実行可能
+- ヘッドレス環境でも実行可能
 
 ## 必要条件
 
@@ -65,11 +65,70 @@ pip install numpy opencv-python-headless
 ls -la /usr/share/imx500-models/
 ```
 
-### 4. アプリケーションの実行
+### 4. 設定ファイルの準備
 
 ```bash
-# プログラム実行
+# 設定ファイルを作成する
+vim config.json
+
+{
+  "MAX_TRACKING_DISTANCE": 60,
+  "DETECTION_THRESHOLD": 0.55,
+  "IOU_THRESHOLD": 0.3,
+  "MAX_DETECTIONS": 30,
+  "TRACKING_TIMEOUT": 5.0,
+  "COUNTING_INTERVAL": 60,
+  "OUTPUT_DIR": "people-count-data",
+  "DEBUG_MODE": false,
+  "DEBUG_IMAGES_SUBDIR_NAME": "debug_images",
+  "RTSP_SERVER_URL": "None",
+  "RTSP_SERVER_PORT": 0000,
+}
+```
+
+- RTSPでストリーム配信したいときは、RTSPサーバのURLを記載する。
+- 例 : `rtsp://192.168.10.11`
+
+#### AWSに設定ファイルをバックアップしたい場合
+```python
+# カメラ名の設定
+python setup.py
+```
+
+- camera で始めてほしい
+- OK例 : `camera1_2024-06-01_001`
+- OK例 : `cameraABC_2024-05-15_999`
+- NG例 : `cam1_2024-06-01_001`
+- NG例 : `camera-1_2024-06-01_001`
+
+
+#### AWSに設定ファイルをバックアップする必要がない場合
+```bash
+# カメラ名ファイルを作成する
+vim camera_name.json
+
+{
+  "CAMERA_NAME": "cameraTestA"
+}
+```
+
+### 5. アプリケーションの実行
+
+```bash
+# プログラム実行(RTSP配信したい場合はRTSP_SERVER_URLを記載したら動作します)
+python people_counter.py
+
+# ヘッドレス環境の場合
 python people_counter_non_gui.py
+
+# ヘッドレス環境で映像をRTSP配信したい場合
+python people_counter_rtsp_stream.py
+
+# ラズパイ側で解析しないで、データを流してサーバ側で解析したい場合
+python people_detection_stream.py
+
+# その場合のサーバ側で実行するプログラム
+python people_count_service.py
 ```
 
 ## 時間制限運用設定
@@ -197,20 +256,6 @@ sudo systemctl status people-counter-non-gui
 
 # サービスログの確認
 journalctl -u people-counter-non-gui.service -n 20
-```
-
-## 初期設定
-```python
-
-# カメラ名の設定
-
-python setup.py
-
-camera で始めてほしい
-camera1_2024-06-01_001.json → OK
-cameraABC_2024-05-15_999.jpg → OK
-cam1_2024-06-01_001.json → NG（頭が“camera”ではない）
-camera-1_2024-06-01_001.json → NG（“-”は\wに含まれない）
 ```
 
 ## Note
