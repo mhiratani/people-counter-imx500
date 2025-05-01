@@ -82,7 +82,7 @@ vim config.json
   "DEBUG_MODE": false,
   "DEBUG_IMAGES_SUBDIR_NAME": "debug_images",
   "RTSP_SERVER_URL": "None",
-  "RTSP_SERVER_PORT": 0000,
+  "RTSP_SERVER_PORT": 8554
 }
 ```
 
