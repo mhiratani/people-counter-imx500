@@ -81,8 +81,7 @@ vim config.json
   "OUTPUT_DIR": "people-count-data",
   "DEBUG_MODE": false,
   "DEBUG_IMAGES_SUBDIR_NAME": "debug_images",
-  "RTSP_SERVER_URL": "None",
-  "RTSP_SERVER_PORT": 8554
+  "RTSP_SERVER_IP": "None"
 }
 ```
 
@@ -115,7 +114,7 @@ vim camera_name.json
 ### 5. アプリケーションの実行
 
 ```bash
-# プログラム実行(RTSP配信したい場合はRTSP_SERVER_URLを記載したら動作します)
+# プログラム実行(RTSP配信したい場合はRTSP_SERVER_IPを記載したら動作します)
 python people_counter.py
 
 # ヘッドレス環境の場合

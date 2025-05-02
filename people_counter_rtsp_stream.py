@@ -98,8 +98,8 @@ DEBUG_IMAGES_SUBDIR_NAME = config.get('DEBUG_IMAGES_SUBDIR_NAME', 'debug_images'
 DEBUG_IMAGES_DIR = os.path.join(OUTPUT_DIR, DEBUG_IMAGES_SUBDIR_NAME)
 
 # RTSP配信先URL
-RTSP_SERVER_URL = config.get('RTSP_SERVER_URL',None)
-RTSP_SERVER_PORT = config.get('RTSP_SERVER_PORT',1234)
+RTSP_SERVER_IP = config.get('RTSP_SERVER_IP','None')
+RTSP_SERVER_PORT = 8554
 
 # ログ設定
 LOG_INTERVAL = 5  # ログ出力間隔（秒）
@@ -485,6 +485,8 @@ def render_frame(frame, center_line_x, frame_height):
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
         if ffmpeg_proc and ffmpeg_proc.stdin:
             ffmpeg_proc.stdin.write(frame_bgr.astype(np.uint8).tobytes())
+        else:
+            print("ffmpegプロセスが終了/異常状態です、RTSP配信writeを中止。")
     except Exception as e:
         print(f"RTSP配信エラー: {e}")
 
@@ -627,11 +629,11 @@ if __name__ == "__main__":
         print("カメラ起動完了")
 
         # RTSP配信用 設定値
-        if RTSP_SERVER_URL:
-            FRAME_WIDTH  = config.get('FRAME_WIDTH', 640)   # 環境にあわせ適宜
-            FRAME_HEIGHT = config.get('FRAME_HEIGHT', 480)
+        if RTSP_SERVER_IP != 'None':
+            FRAME_WIDTH  = 640
+            FRAME_HEIGHT = 480
             FRAME_RATE = int(intrinsics.inference_rate) if hasattr(intrinsics, 'inference_rate') else 15
-            RTSP_URL = f"{RTSP_SERVER_URL}:{RTSP_SERVER_PORT}/stream"
+            RTSP_URL = f"rtsp://{RTSP_SERVER_IP}:{RTSP_SERVER_PORT}/stream"
 
             ffmpeg_cmd = [
                 "ffmpeg",
@@ -655,7 +657,7 @@ if __name__ == "__main__":
                 print(f"ffmpeg起動失敗: {e}")
                 sys.exit(1)
         else:
-            print(f"RTSP_SERVER_URLが未指定のためRTSP配信は行いません")
+            print(f"[ERROR] RTSPサーバー {RTSP_SERVER_IP}:{RTSP_SERVER_PORT} に接続できません！")
 
     except Exception as e:
         print(f"カメラ初期化エラーまたはIMX500初期化エラー: {e}")

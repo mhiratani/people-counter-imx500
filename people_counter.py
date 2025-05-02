@@ -104,8 +104,8 @@ LOG_INTERVAL = 5  # ログ出力間隔（秒）
 last_log_time = 0
 
 # RTSP配信先URL
-RTSP_SERVER_URL = config.get('RTSP_SERVER_URL','None')
-RTSP_SERVER_PORT = config.get('RTSP_SERVER_PORT','')
+RTSP_SERVER_IP = config.get('RTSP_SERVER_IP','None')
+RTSP_SERVER_PORT = 8554
 
 def init_process_frame_callback():
     # コールバック関数の属性を初期化
@@ -533,7 +533,7 @@ def process_frame_callback(request):
             cv2.putText(m.array, f"Remaining time: {remaining}sec", 
                         (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
-            if RTSP_SERVER_URL != 'None':
+            if RTSP_SERVER_IP != 'None':
                 try:
                     frame_for_rtsp = m.array
                     if frame_for_rtsp.shape[2] == 4:
@@ -645,11 +645,11 @@ if __name__ == "__main__":
         print("カメラ起動完了")
 
         # RTSP配信用 設定値
-        if RTSP_SERVER_URL != 'None':
+        if RTSP_SERVER_IP != 'None':
             FRAME_WIDTH  = 640
             FRAME_HEIGHT = 480
             FRAME_RATE = int(intrinsics.inference_rate) if hasattr(intrinsics, 'inference_rate') else 15
-            RTSP_URL = f"{RTSP_SERVER_URL}:{RTSP_SERVER_PORT}/stream"
+            RTSP_URL = f"rtsp://{RTSP_SERVER_IP}:{RTSP_SERVER_PORT}/stream"
 
             ffmpeg_cmd = [
                 "ffmpeg",
@@ -673,7 +673,7 @@ if __name__ == "__main__":
                 print(f"ffmpeg起動失敗: {e}")
                 sys.exit(1)
         else:
-            print(f"RTSP_SERVER_URLが未指定のためRTSP配信は行いません")
+            print(f"RTSP_SERVER_IPが未指定のためRTSP配信は行いません")
 
     except Exception as e:
         print(f"カメラ初期化エラーまたはIMX500初期化エラー: {e}")
