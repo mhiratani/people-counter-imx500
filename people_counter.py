@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import sys
@@ -589,6 +590,10 @@ def process_frame_callback(request):
 
 # ======= メイン処理 =======
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="IMX500 AIカメラモジュール制御")
+    parser.add_argument('--preview', action='store_true', help='プレビュー画面を表示する')
+    args = parser.parse_args()
+
     # 出力ディレクトリの作成
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(DATE_DIR, exist_ok=True)
@@ -628,7 +633,7 @@ if __name__ == "__main__":
         main = {'format': 'XRGB8888'} # AI検出結果の描画は行わないのでプレビューは不要だが、コールバックには必要
 
         # ヘッドレス環境用の設定
-        config = picam2.create_preview_configuration(main, controls={"FrameRate": intrinsics.inference_rate}, buffer_count=6)
+        config = picam2.create_preview_configuration(main, controls={"FrameRate": intrinsics.inference_rate}, buffer_count=8)
 
         imx500.show_network_fw_progress_bar()
 
@@ -636,9 +641,12 @@ if __name__ == "__main__":
         # 2段階の初期化
         picam2.configure(config)
         time.sleep(0.5)  # 少し待機
-        # picam2.start()  # ヘッドレスモードでスタート
-        picam2.start(show_preview=True)  # プレビューを表示
-        
+
+        if args.preview:
+            picam2.start(show_preview=True)  # プレビューを表示
+        else:
+            picam2.start()                   # ヘッドレスモード
+
         if intrinsics.preserve_aspect_ratio:
             imx500.set_auto_aspect_ratio()
             
