@@ -8,6 +8,10 @@ from functools import lru_cache
 import numpy as np
 from scipy.optimize import linear_sum_assignment    # scipyの線形割当アルゴリズム
 
+# NMS(Non-Maximum Suppression)適用
+import torch
+from torchvision.ops import nms
+
 from picamera2 import MappedArray, Picamera2
 from picamera2.devices import IMX500
 from picamera2.devices.imx500 import (NetworkIntrinsics, postprocess_nanodet_detection)
@@ -284,13 +288,37 @@ def parse_detections(metadata: dict):
             boxes = scale_boxes(boxes, 1, 1, input_h, input_w, False, False)
             boxes = [[b[0], b[1], b[2]-b[0], b[3]-b[1]] for b in boxes] # [x1, y1, x2, y2] -> [x, y, w, h]
 
-        else: # SSDなどの場合
+        else:  # SSDなどの場合
             # デフォルトはSSD系と仮定 [y_min, x_min, y_max, x_max] 正規化されている可能性あり
             # imx500.convert_inference_coords がこれらの変換と正規化解除を行う
             boxes, scores, classes = np_outputs[0][0], np_outputs[1][0], np_outputs[2][0]
-            # boxesの形状が (N, 4) であればそのまま使用、そうでなければzip等で整形
+
+            # ▼ Box形状調整（(N,4) でなければ整形）
             if boxes.shape[1] != 4:
                 boxes = np.array(list(zip(*np.array_split(boxes, 4, axis=1))))
+            # ▼ スコアしきい値でフィルタ（スコア・クラス・ボックスを同期してFilter）
+            mask = scores > DETECTION_THRESHOLD
+            boxes = boxes[mask]
+            scores = scores[mask]
+            classes = classes[mask]
+
+            # Box: [ymin, xmin, ymax, xmax] → [xmin, ymin, xmax, ymax] へ変換
+            if boxes.shape[0] > 0:
+                boxes_xyxy = boxes.copy()
+                # [ymin, xmin, ymax, xmax] -> [xmin, ymin, xmax, ymax]
+                boxes_xyxy = boxes_xyxy[:, [1, 0, 3, 2]]
+
+                boxes_tensor = torch.tensor(boxes_xyxy, dtype=torch.float32)
+                scores_tensor = torch.tensor(scores, dtype=torch.float32)
+
+                keep = nms(boxes_tensor, scores_tensor, iou_threshold=IOU_THRESHOLD)
+                boxes = boxes[keep.numpy()]        # NMS前の元形式（[ymin, xmin, ymax, xmax]）
+                scores = scores[keep.numpy()]
+                classes = classes[keep.numpy()]
+            else:
+                boxes = np.empty((0,4), dtype=float)
+                scores = np.empty((0,), dtype=float)
+                classes = np.empty((0,), dtype=float)
 
         # 信頼度と人物クラスのみをフィルタリングし、Detectionオブジェクトを作成
         detections = [
