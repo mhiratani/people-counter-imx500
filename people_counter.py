@@ -175,6 +175,7 @@ class Person:
         self.crossed_direction = None
         self.lost_start_time = None
         self.lost_last_box = None
+        self.has_counted = False
 
     def get_center(self):
         """バウンディングボックスの中心座標を取得"""
@@ -510,6 +511,9 @@ def track_people(detections, active_people, lost_people, frame_id, center_line_x
 def check_line_crossing(person, center_line_x, frame=None):
     """中央ラインを横切ったかチェック"""
     if len(person.trajectory) < 2:
+        return None
+
+    if person.person.crossed_direction is not None:
         return None
 
     for i in range(1, len(person.trajectory)):
