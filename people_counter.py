@@ -416,7 +416,8 @@ def track_people(detections, active_people, frame_id=None):
     if (
         np.all(np.isinf(cost_matrix)) or 
         np.any(np.all(np.isinf(cost_matrix), axis=0)) or 
-        np.any(np.all(np.isinf(cost_matrix), axis=1))
+        np.any(np.all(np.isinf(cost_matrix), axis=1)) or
+        np.sum(np.isfinite(cost_matrix)) < max(cost_matrix.shape)   # 有限値の要素数 < 行or列の大きいほう（マッチングに必要な最小数）なら諦める
     ):
         # print("Assignment infeasible: some row or column is all inf.")
         return active_people
