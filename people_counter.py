@@ -404,13 +404,9 @@ def track_people(detections, active_people, frame_id=None):
             distance = np.sqrt((person_center[0] - detection_center[0])**2 + (person_center[1] - detection_center[1])**2)
             iou = calculate_iou(person_box, detection_box)
 
-            # マッチングの条件: 距離が閾値以内 かつ IOUが閾値以上
-            if distance < MAX_TRACKING_DISTANCE and iou > IOU_THRESHOLD:
-                # コストの定義 (距離が近いほど、IOUが大きいほど良いマッチング -> コスト小)
-                # シンプルに距離をコストとする
-                cost = distance
-                # より高度なコスト例: cost = (1.0 - iou) + (distance / MAX_TRACKING_DISTANCE) * 0.1 # IOUを重視
-                cost_matrix[i, j] = cost
+            # 多少広めに許容する
+            cost = (1.0 - iou) + (distance / 200.0)  # 200pxを仮の最大とする
+            cost_matrix[i, j] = cost
 
     # コスト行列の全要素がinf or どの行or列も全てinfならreturn
     if (
@@ -433,31 +429,30 @@ def track_people(detections, active_people, frame_id=None):
             new_people = []
             # マッチした検出結果のインデックスを記録
             used_detections = set(matched_detection_indices)
-
+            used_person = set(matched_person_indices)
+            # コストが高すぎる場合は不一致とみなす（例: 1.2以上。適宜調整）
+            MAX_COST = 1.2
             # マッチした人物を更新して新しいリストに追加
             for i, j in zip(matched_person_indices, matched_detection_indices):
                 # コストがinfの場合は有効なマッチではないのでスキップ (linear_sum_assignmentはinfも考慮する)
-                if cost_matrix[i, j] == np.inf:
-                    continue
-                person = active_people[i]
-                detection = detections[j]
-                person.update(detection.box) # 人物情報を検出結果で更新
-                new_people.append(person)
-
-            # マッチしなかった既存の人物を新しいリストに追加 (タイムアウト判定は後で行われる)
-            matched_person_ids = {p.id for p in new_people} # 更新された人物のIDセット
-            for person in active_people:
-                if person.id not in matched_person_ids:
-                    # この人物は今回のフレームでは検出されなかった
-                    # 情報を更新しないままリストに追加。last_seenは前回のまま。
+                if cost_matrix[i,j] < MAX_COST:
+                    person = active_people[i]
+                    detection = detections[j]
+                    person.update(detection.box)
                     new_people.append(person)
+                else:
+                    pass # 不一致
 
             # マッチしなかった新しい検出結果を新しい人物としてリストに追加
             for j, detection in enumerate(detections):
                 if j not in used_detections:
-                    new_people.append(Person(detection.box)) # 新しい人物を作成
+                    new_people.append(Person(detection.box))  # 新しい人物を作成
+            # 失踪した人物も追加
+            for i, person in enumerate(active_people):
+                if i not in used_person:
+                    new_people.append(person)
 
-            # ここではタイムアウト判定は行わない。process_frame_callbackでまとめて行う。
+            print("distance=", distance, "iou=", iou)
             return new_people
 
         except Exception as e:
