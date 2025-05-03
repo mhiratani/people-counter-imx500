@@ -148,8 +148,15 @@ def extract_appearance_feature(image, box):
     """box=(x,y,w,h)の部分を96x96で切り抜き特徴ベクトルに変換"""
     x, y, w, h = map(int, box)
     crop = image[max(0,y):max(0,y+h), max(0,x):max(0,x+w)]
-    if crop.size == 0: return np.zeros((1280,), dtype=np.float32)
+    if crop.size == 0:
+        return np.zeros((1280,), dtype=np.float32)
     crop = cv2.resize(crop, (96,96))
+
+    if crop.shape[2] == 4:       # 4ch(XRGB/BGRAなど)→3ch(RGB)
+        crop = cv2.cvtColor(crop, cv2.COLOR_BGRA2RGB)
+    elif crop.shape[2] == 3:     # 3chの場合はBGR→RGB
+        crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+
     crop = preprocess_input(crop.astype(np.float32))
     feature = mobilenet.predict(crop[None], verbose=0)[0]
     # L2正規化して比較しやすく
