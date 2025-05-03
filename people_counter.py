@@ -477,7 +477,7 @@ def track_people(detections, active_people, lost_people, frame_id, center_line_x
                     lost_cx, _ = lost_person.get_center()
                     det_cx, _ = detection.get_center()
                     # ライン中心の±20px・距離50px以内・ロストから1秒以内など
-                    if center_line_x and (abs(lost_cx - center_line_x) < 10 and abs(det_cx - lost_cx) < 25 and now - lost_person.lost_start_time < ACTIVE_TIMEOUT):
+                    if center_line_x and (abs(lost_cx - center_line_x) < 20 and abs(det_cx - lost_cx) < 50 and now - lost_person.lost_start_time < ACTIVE_TIMEOUT):
                         lost_person.update(detection.box)
                         new_people.append(lost_person)
                         recovered.append(lost_person)
@@ -519,17 +519,15 @@ def check_line_crossing(person, center_line_x, frame=None):
         if min(prev_x, curr_x) < center_line_x <= max(prev_x, curr_x):
             # ラインをどちら方向にまたいだか判定
             if prev_x < center_line_x:
-                    person.crossed_direction = "left_to_right"
-
-            # デバッグモードで画像を保存
-            if DEBUG_MODE and frame is not None:
-                modules.save_debug_image(frame, person, center_line_x, "left_to_right", counter.debug_images_dir, counter.output_prefix)
+                person.crossed_direction = "left_to_right"
+                # デバッグモードで画像を保存
+                if DEBUG_MODE and frame is not None:
+                    modules.save_debug_image(frame, person, center_line_x, "left_to_right", counter.debug_images_dir, counter.output_prefix)
 
                 return "left_to_right"
             # 右→左: 中央線を以上→未満で通過
             else:
                 person.crossed_direction = "right_to_left"
-
                 # デバッグモードで画像を保存
                 if DEBUG_MODE and frame is not None:
                     modules.save_debug_image(frame, person, center_line_x, "right_to_left", counter.debug_images_dir, counter.output_prefix)
