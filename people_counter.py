@@ -575,7 +575,7 @@ def process_frame_callback(request):
                     (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
             # 時刻とフレームIDを表示
-            timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             text_str = f"FrameID: {frame_id} / {timestamp}"
             cv2.putText(m.array, text_str,
                         (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
