@@ -69,7 +69,7 @@ DETECTION_THRESHOLD = config.get('DETECTION_THRESHOLD', 0.55)
 #   通常0.4～0.7程度を試行して決定。推奨: バリデーション動画でF1スコア最大化する値
 # ----------------------------------------------
 
-IOU_THRESHOLD = config.get('IOU_THRESHOLD', 0.3)
+IOU_THRESHOLD = config.get('IOU_THRESHOLD', 0.5)
 # ----------------------------------------------
 # マッチング時、追跡対象と検出結果の「バウンディングボックスの重なり（IoU）」の下限値。
 # この値より大きい場合のみ同一人物候補とする。
@@ -254,8 +254,42 @@ class PeopleCounter:
             print(f"Failed to save data to {filename}: {e}")
             return False # 保存失敗
 
-
 # ======= 検出と追跡の関数 =======
+def remove_overlap_boxes(boxes, scores, dist_thresh=30):
+    """
+    検出ボックス群から、中心点距離が閾値未満となる重複ボックスを除去します。
+
+    通常のNMS後でもIoUが低い場合は重複検出が残ることがあり、
+    本関数は同一人物にズレた複数ボックスが割り当てられるのを追加で防ぐ目的で用います。
+
+    :param boxes: np.ndarray of shape (N, 4)
+        検出ボックス座標群（[ymin, xmin, ymax, xmax]形式、または[x1, y1, x2, y2]形式）
+    :param scores: np.ndarray of shape (N,)
+        各ボックスの信頼度スコア
+    :param dist_thresh: float
+        ボックス中心点間の距離がこの値未満なら重複と判定
+        画像サイズによって30前後〜数十ピクセルで実験的に調整推奨
+
+    :return: keep_indices: list of int
+        残すべきボックスのインデックスリスト
+    """
+    centers = np.vstack([(boxes[:,1]+boxes[:,3])/2, (boxes[:,0]+boxes[:,2])/2]).T
+    keep = []
+    used = set()
+    for i in range(len(boxes)):
+        if i in used: continue
+        keep.append(i)
+        for j in range(i+1, len(boxes)):
+            if j in used: continue
+            dist = np.linalg.norm(centers[i] - centers[j])
+            if dist < dist_thresh:
+                # 近い方を低スコア側を消す
+                if scores[i] >= scores[j]:
+                    used.add(j)
+                else:
+                    used.add(i)
+    return keep
+
 def parse_detections(metadata: dict):
     """
     AIモデルの出力テンソルを解析し、検出された人物のリストを返す
@@ -291,6 +325,13 @@ def parse_detections(metadata: dict):
             # boxesの形状が (N, 4) であればそのまま使用、そうでなければzip等で整形
             if boxes.shape[1] != 4:
                 boxes = np.array(list(zip(*np.array_split(boxes, 4, axis=1))))
+
+        # ボックスの追加除去
+        if len(boxes) > 1:
+            keep_idxs = remove_overlap_boxes(boxes, scores, dist_thresh=30) # しきい値は用調整
+            boxes = boxes[keep_idxs]
+            scores = scores[keep_idxs]
+            classes = classes[keep_idxs]
 
         # 信頼度と人物クラスのみをフィルタリングし、Detectionオブジェクトを作成
         detections = [
