@@ -448,7 +448,7 @@ def track_people(detections, active_people, lost_people, frame_id, center_line_x
     # 各組み合わせペアごとに「重なり具合（IoU）」と「中心間距離」を算出し、総合的なコストを定義。
     for i, person in enumerate(active_people):
         # ------- 予測中心点を計算 -------
-        avg_motion = person.get_avg_motion(window=5)  # 直近5フレーム平均ベクトル
+        avg_motion = person.get_avg_motion()
         pred_center = (
             person.trajectory[-1][0] + avg_motion[0],
             person.trajectory[-1][1] + avg_motion[1]
@@ -487,6 +487,14 @@ def track_people(detections, active_people, lost_people, frame_id, center_line_x
             # 例: 距離200px以上はコスト+1, IoU 1.0→加点ゼロ, IoU 0→+1
             # ------- コスト計算 -------
             cost = (1.0 - iou) + (distance / 200.0)  # 200pxを「最大許容距離」とするスケーリング
+
+            # costにX軸方向の一貫性重視ペナルティ
+            DIRECTION_PENALTY = 0.8  # 逆方向へのマッチに与える追加コスト（要現場で調整）
+            avg_motion_x = avg_motion[0]
+            intended_dir = np.sign(avg_motion_x)
+            actual_dir = np.sign(detection_center[0] - person.trajectory[-1][0])
+            if intended_dir != 0 and actual_dir != 0 and intended_dir != actual_dir:
+                cost += DIRECTION_PENALTY
 
             cost_matrix[i, j] = cost  # コスト行列の値を格納
 
@@ -537,7 +545,7 @@ def track_people(detections, active_people, lost_people, frame_id, center_line_x
 
             # ここで new_people(=今期マッチ分)に含まれなかったactive_peopleは「一時ロスト」の候補
             now = time.time()
-            ACTIVE_TIMEOUT = 1.0  # lost_people保持猶予(秒)（状況で要調整）
+            ACTIVE_TIMEOUT = 0.5  # lost_people保持猶予(秒)（状況で要調整）
 
             # マッチしなかったactive_people→lost_peopleへ
             for i, person in enumerate(active_people):
@@ -553,8 +561,19 @@ def track_people(detections, active_people, lost_people, frame_id, center_line_x
                     # [復帰条件] 距離/IOU/ライン近傍/経過時間
                     lost_cx, _ = lost_person.get_center()
                     det_cx, _ = detection.get_center()
-                    # ライン中心の±20px・距離50px以内・ロストから1秒以内など
-                    if center_line_x and (abs(lost_cx - center_line_x) < 20 and abs(det_cx - lost_cx) < 50 and now - lost_person.lost_start_time < ACTIVE_TIMEOUT):
+                    avg_dx, avg_dy = lost_person.get_avg_motion(window=5)
+                    diff_x = det_cx - lost_cx
+                    # 移動平均の符号が一致（右なら右，左なら左へ離れてる）
+                    same_direction = (avg_dx * diff_x > 0)  
+                    # ライン中心の±20px・距離100px以内・ACTIVE_TIMEOUT秒以内など
+                    if (
+                        center_line_x and
+                        abs(lost_cx - center_line_x) < 45 and
+                        abs(diff_x) < 100 and
+                        now - lost_person.lost_start_time < ACTIVE_TIMEOUT and
+                        same_direction
+                    ):
+                        print(f"recovered:{frame_id}/{person.id}")
                         lost_person.update(detection.box)
                         new_people.append(lost_person)
                         recovered.append(lost_person)
@@ -571,7 +590,7 @@ def track_people(detections, active_people, lost_people, frame_id, center_line_x
                 if not match_found:
                     new_people.append(Person(detection.box))
 
-            print("distance=", distance, "iou=", iou)
+            # print("distance=", distance, "iou=", iou)
             return new_people, lost_people
 
         except Exception as e:
