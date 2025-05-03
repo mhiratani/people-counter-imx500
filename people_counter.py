@@ -477,7 +477,7 @@ def track_people(detections, active_people, lost_people, frame_id, center_line_x
                     lost_cx, _ = lost_person.get_center()
                     det_cx, _ = detection.get_center()
                     # ライン中心の±20px・距離50px以内・ロストから1秒以内など
-                    if center_line_x and (abs(lost_cx - center_line_x) < 20 and abs(det_cx - lost_cx) < 50 and now - lost_person.lost_start_time < ACTIVE_TIMEOUT):
+                    if center_line_x and (abs(lost_cx - center_line_x) < 10 and abs(det_cx - lost_cx) < 25 and now - lost_person.lost_start_time < ACTIVE_TIMEOUT):
                         lost_person.update(detection.box)
                         new_people.append(lost_person)
                         recovered.append(lost_person)
@@ -568,14 +568,14 @@ def process_frame_callback(request):
         if not isinstance(active_people, list):
             print(f"track_people returned : {type(active_people)}")
 
-        if frame is not None:
+        with MappedArray(request, 'main') as m:
             # 起動時の画像を一度だけ保存
             if not process_frame_callback.image_saved:
-                modules.save_image_at_startup(frame, center_line_x, counter.date_dir, counter.output_prefix)
+                modules.save_image_at_startup(m.array, center_line_x, counter.date_dir, counter.output_prefix)
                 process_frame_callback.image_saved = True
 
             # 中央ラインを描画
-            cv2.line(frame, (center_line_x, 0), (center_line_x, frame_height), 
+            cv2.line(m.array, (center_line_x, 0), (center_line_x, frame_height), 
                     (255, 255, 0), 2)
             
             # 人物の検出ボックスと軌跡を描画
@@ -591,33 +591,33 @@ def process_frame_callback(request):
                     color = (255, 255, 255)  # 白: まだカウントされていない
                 
                 # 検出ボックスを描画
-                cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+                cv2.rectangle(m.array, (x, y), (x + w, y + h), color, 2)
                 
                 # ID表示
-                cv2.putText(frame, f"ID: {person.id}", (x, y - 10), 
+                cv2.putText(m.array, f"ID: {person.id}", (x, y - 10), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
                 
                 # 軌跡を描画
                 if len(person.trajectory) > 1:
                     for i in range(1, len(person.trajectory)):
-                        cv2.line(frame, person.trajectory[i-1], person.trajectory[i], color, 2)
+                        cv2.line(m.array, person.trajectory[i-1], person.trajectory[i], color, 2)
             
             # カウント情報を表示
             total_counts = counter.get_total_counts()
-            cv2.putText(frame, f"right_to_left: {total_counts['right_to_left']}", 
+            cv2.putText(m.array, f"right_to_left: {total_counts['right_to_left']}", 
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            cv2.putText(frame, f"left_to_right: {total_counts['left_to_right']}", 
+            cv2.putText(m.array, f"left_to_right: {total_counts['left_to_right']}", 
                     (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
             # 時刻とフレームIDを表示
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             text_str = f"FrameID: {frame_id} / {timestamp}"
-            cv2.putText(frame, text_str,
+            cv2.putText(m.array, text_str,
                         (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
             # ========== RTSP非同期配信 ==========
             if RTSP_SERVER_IP != 'None' and ffmpeg_proc and ffmpeg_proc.stdin:
-                frame_for_rtsp = frame
+                frame_for_rtsp = m.array
                 # BGRA→BGR変換
                 if frame_for_rtsp.shape[2] == 4:
                     frame_for_rtsp = cv2.cvtColor(frame_for_rtsp, cv2.COLOR_BGRA2BGR)
@@ -628,7 +628,7 @@ def process_frame_callback(request):
         for person in active_people:
             # 少なくとも2フレーム以上の軌跡がある人物が対象
             if len(person.trajectory) >= 2:
-                direction = check_line_crossing(person, center_line_x, frame)
+                direction = check_line_crossing(person, center_line_x, m.array)
                 # print(f"[DEBUG] 人物ID {person.id} のライン判定")
                 # print(f"[DEBUG] 軌跡: {person.trajectory[-2:]} (最後の2点を表示)")
                 # distances = [abs(xy[0] - center_line_x) for xy in person.trajectory[-2:]]
