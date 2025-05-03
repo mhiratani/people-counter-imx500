@@ -193,6 +193,25 @@ class Person:
             self.trajectory.pop(0)
         self.last_seen = time.time()
 
+    def get_avg_motion(self, window=None):
+        """
+        現在のtrajectory全体、または最新windowフレーム分の移動平均ベクトルを返す。
+        window: 計算に使う過去フレーム数（Noneで全体）
+        """
+        centers = self.trajectory
+        if len(centers) < 2:
+            return (0, 0)
+
+        # 対象範囲を部分抽出できるように
+        if window is not None and len(centers) > window:
+            centers = centers[-window:]
+
+        dxs = [centers[i+1][0] - centers[i][0] for i in range(len(centers)-1)]
+        dys = [centers[i+1][1] - centers[i][1] for i in range(len(centers)-1)]
+
+        avg_dx = sum(dxs) / len(dxs)
+        avg_dy = sum(dys) / len(dys)
+        return (avg_dx, avg_dy)
 
 class PeopleCounter:
     def __init__(self, start_time, output_dir=OUTPUT_DIR, output_prefix=OUTPUT_PREFIX, date_dir=DATE_DIR, debug_images_dir=DEBUG_IMAGES_DIR):
@@ -428,31 +447,45 @@ def track_people(detections, active_people, lost_people, frame_id, center_line_x
     # 既存の追跡ターゲット（active_people）と新たな検出結果（detections）との間で、
     # 各組み合わせペアごとに「重なり具合（IoU）」と「中心間距離」を算出し、総合的なコストを定義。
     for i, person in enumerate(active_people):
-        # 追跡対象「person」の直近検出ボックスおよび中心座標を取得
-        person_box = person.box
-        person_center = person.get_center()  # (x, y)形式（追跡履歴から取得）
+        # ------- 予測中心点を計算 -------
+        avg_motion = person.get_avg_motion(window=5)  # 直近5フレーム平均ベクトル
+        pred_center = (
+            person.trajectory[-1][0] + avg_motion[0],
+            person.trajectory[-1][1] + avg_motion[1]
+        )
 
+        # ------- 予測ボックスを作成 -------
+        # 現在のBoxサイズは維持しつつ、中心点のみ「予測位置」に移動したboxを作る
+        w, h = person.box[2], person.box[3]
+        pred_box = [
+            pred_center[0] - w // 2,   # 左上x（予測中心x - 幅/2）
+            pred_center[1] - h // 2,   # 左上y（予測中心y - 高さ/2）
+            w,                         # 幅
+            h                          # 高さ
+        ]
+
+        # ------- 検出結果（detections）とコスト計算 -------
         for j, detection in enumerate(detections):
             detection_box = detection.box
             # 検出ボックスの中心座標（x, y）を計算
             detection_center = (
-                detection_box[0] + detection_box[2] // 2,  # x + w/2
-                detection_box[1] + detection_box[3] // 2   # y + h/2
+                detection_box[0] + detection_box[2] // 2,   # 検出boxの中心x
+                detection_box[1] + detection_box[3] // 2    # 検出boxの中心y
             )
 
             # --- 距離・IoU計算 ---
-            # ボックス中心座標間のユークリッド距離（ピクセル単位）
+            # 【距離】予測中心点と検出中心点とのユークリッド距離（ピクセル単位）
             distance = np.sqrt(
-                (person_center[0] - detection_center[0]) ** 2 +
-                (person_center[1] - detection_center[1]) ** 2
+                (pred_center[0] - detection_center[0]) ** 2 +
+                (pred_center[1] - detection_center[1]) ** 2
             )
-            # 2つのバウンディングボックスのIoU（重なり率）を計算
-            iou = calculate_iou(person_box, detection_box)
-
+            # 【IoU】予測ボックスと検出boxのIoU（重なり率：0~1）
+            iou = calculate_iou(pred_box, detection_box)
             # --- 総合コストの定義 ---
             # 距離が近くIoUが大きい（よく重なっている）ほどコストが小さくなるよう設計
+            # → IoU大・距離小の組み合わせほどcostは小さい（良いマッチングと見なされる）
             # 例: 距離200px以上はコスト+1, IoU 1.0→加点ゼロ, IoU 0→+1
-            # → トラッキング割り当てアルゴリズム（例: ハンガリアン法等）で最小コスト割付
+            # ------- コスト計算 -------
             cost = (1.0 - iou) + (distance / 200.0)  # 200pxを「最大許容距離」とするスケーリング
 
             cost_matrix[i, j] = cost  # コスト行列の値を格納
