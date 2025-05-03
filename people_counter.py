@@ -138,6 +138,27 @@ def send_frame_for_rtsp(frame):
     except queue.Full:
         pass  # 複数同時発生時もスルー
 
+def extract_color_histogram(image, box):
+    """box=(x,y,w,h)部分の3次元RGBヒストグラム(配列)を返す"""
+    x, y, w, h = map(int, box)
+    crop = image[max(0, y):max(0, y + h), max(0, x):max(0, x + w)]
+    if crop.size == 0:
+        # 何も取れなかった場合は0ベクトル返す
+        return np.zeros((512,), dtype=np.float32)
+    # 必要に応じてBGR→RGB
+    if crop.ndim == 3 and crop.shape[2] == 3:
+        crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+    elif crop.ndim == 2:
+        crop = cv2.cvtColor(crop, cv2.COLOR_GRAY2RGB)
+    # 3次元(R,G,B)ヒストグラム, bin数8ずつ
+    hist = cv2.calcHist([crop], [0, 1, 2], None, [8, 8, 8], [0,256,0,256,0,256])
+    hist = cv2.normalize(hist, hist).flatten()
+    return hist
+
+def color_hist_distance(hist1, hist2):
+    """2つのヒストグラム間のL2距離を計算（小さいほど類似）"""
+    return np.linalg.norm(hist1 - hist2)
+
 # ============ コールバック関数の属性を初期化 ============
 def init_process_frame_callback():
     process_frame_callback.image_saved = False
@@ -161,10 +182,11 @@ class Detection:
 class Person:
     next_id = 0
 
-    def __init__(self, box):
+    def __init__(self, box, color_hist=None):
         self.id = Person.next_id
         Person.next_id += 1
         self.box = box # [x, y, w, h] 形式
+        self.color_hist = color_hist
         self.trajectory = [self.get_center()]
         self.first_seen = time.time()
         self.last_seen = time.time()
@@ -364,7 +386,7 @@ def calculate_iou(box1, box2):
 
     return iou
 
-def track_people(detections, active_people, frame_id=None):
+def track_people(detections, active_people, frame=None, frame_id=None):
     """
     物体検出で得られた人物候補（detections）と、既存の追跡対象（active_people）を
     効率的かつ精度良くマッチングし、追跡リストを更新します。
@@ -372,6 +394,8 @@ def track_people(detections, active_people, frame_id=None):
     """
     num_people = len(active_people)
     num_detections = len(detections)
+    for det in detections:
+        det.color_hist = extract_color_histogram(frame, det.box)
 
     # 検出結果も追跡対象もいない場合はそのまま返す
     if num_detections == 0 and num_people == 0:
@@ -383,7 +407,7 @@ def track_people(detections, active_people, frame_id=None):
 
     # 追跡対象がいない場合、全ての検出を新しい人物とする
     if num_people == 0:
-        return [Person(det.box) for det in detections]
+        return [Person(det.box, det.color_hist) for det in detections]
 
     # コスト行列を作成
     # 行: active_people, 列: detections
@@ -405,7 +429,9 @@ def track_people(detections, active_people, frame_id=None):
             iou = calculate_iou(person_box, detection_box)
 
             # 多少広めに許容する
-            cost = (1.0 - iou) + (distance / 200.0)  # 200pxを仮の最大とする
+            gamma = 0.5 # gammaの値は状況によって調整しましょう（例：0.2, 0.3, 0.5などでテスト）
+            color_dist = color_hist_distance(person.color_hist, detection.color_hist)
+            cost = (1.0 - iou) + (distance / 200.0) + gamma * color_dist
             cost_matrix[i, j] = cost
 
     # コスト行列の全要素がinf or どの行or列も全てinfならreturn
@@ -516,24 +542,26 @@ def process_frame_callback(request):
             # 検出処理
             detections = parse_detections(metadata)
 
+        with MappedArray(request, 'main') as m:
+            frame = m.array.copy()
+
         # 人物追跡を更新
-        active_people = track_people(detections, active_people, frame_id)
+        active_people = track_people(detections, active_people, frame, frame_id)
         if not isinstance(active_people, list):
             print(f"track_people returned : {type(active_people)}")
 
         # フレームサイズを取得 (デバッグ画像保存やライン描画で使用)
-        with MappedArray(request, 'main') as m:
-            frame_height, frame_width = m.array.shape[:2]
+        if frame is not None:
+            frame_height, frame_width = frame.shape[:2]
             center_line_x = frame_width // 2
-            frame = m.array.copy()
 
             # 起動時の画像を一度だけ保存
             if not process_frame_callback.image_saved:
-                modules.save_image_at_startup(m.array, center_line_x, counter.date_dir, counter.output_prefix)
+                modules.save_image_at_startup(frame, center_line_x, counter.date_dir, counter.output_prefix)
                 process_frame_callback.image_saved = True
 
             # 中央ラインを描画
-            cv2.line(m.array, (center_line_x, 0), (center_line_x, frame_height), 
+            cv2.line(frame, (center_line_x, 0), (center_line_x, frame_height), 
                     (255, 255, 0), 2)
             
             # 人物の検出ボックスと軌跡を描画
@@ -549,33 +577,33 @@ def process_frame_callback(request):
                     color = (255, 255, 255)  # 白: まだカウントされていない
                 
                 # 検出ボックスを描画
-                cv2.rectangle(m.array, (x, y), (x + w, y + h), color, 2)
+                cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
                 
                 # ID表示
-                cv2.putText(m.array, f"ID: {person.id}", (x, y - 10), 
+                cv2.putText(frame, f"ID: {person.id}", (x, y - 10), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
                 
                 # 軌跡を描画
                 if len(person.trajectory) > 1:
                     for i in range(1, len(person.trajectory)):
-                        cv2.line(m.array, person.trajectory[i-1], person.trajectory[i], color, 2)
+                        cv2.line(frame, person.trajectory[i-1], person.trajectory[i], color, 2)
             
             # カウント情報を表示
             total_counts = counter.get_total_counts()
-            cv2.putText(m.array, f"right_to_left: {total_counts['right_to_left']}", 
+            cv2.putText(frame, f"right_to_left: {total_counts['right_to_left']}", 
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            cv2.putText(m.array, f"left_to_right: {total_counts['left_to_right']}", 
+            cv2.putText(frame, f"left_to_right: {total_counts['left_to_right']}", 
                     (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
             # 時刻とフレームIDを表示
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             text_str = f"FrameID: {frame_id} / {timestamp}"
-            cv2.putText(m.array, text_str,
+            cv2.putText(frame, text_str,
                         (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
             # ========== RTSP非同期配信 ==========
             if RTSP_SERVER_IP != 'None' and ffmpeg_proc and ffmpeg_proc.stdin:
-                frame_for_rtsp = m.array
+                frame_for_rtsp = frame
                 # BGRA→BGR変換
                 if frame_for_rtsp.shape[2] == 4:
                     frame_for_rtsp = cv2.cvtColor(frame_for_rtsp, cv2.COLOR_BGRA2BGR)
