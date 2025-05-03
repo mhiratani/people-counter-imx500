@@ -512,27 +512,29 @@ def check_line_crossing(person, center_line_x, frame=None):
     if len(person.trajectory) < 2:
         return None
 
-    prev_x = person.trajectory[-2][0]
-    curr_x = person.trajectory[-1][0]
+    for i in range(1, len(person.trajectory)):
+        prev_x = person.trajectory[i-1][0]
+        curr_x = person.trajectory[i][0]
+        # 左→右: 中央線を未満→以上で通過
+        if min(prev_x, curr_x) < center_line_x <= max(prev_x, curr_x):
+            # ラインをどちら方向にまたいだか判定
+            if prev_x < center_line_x:
+                    person.crossed_direction = "left_to_right"
 
-    # 左→右: 中央線を未満→以上で通過
-    if (prev_x < center_line_x and curr_x >= center_line_x):
-        person.crossed_direction = "left_to_right"
+            # デバッグモードで画像を保存
+            if DEBUG_MODE and frame is not None:
+                modules.save_debug_image(frame, person, center_line_x, "left_to_right", counter.debug_images_dir, counter.output_prefix)
 
-        # デバッグモードで画像を保存
-        if DEBUG_MODE and frame is not None:
-            modules.save_debug_image(frame, person, center_line_x, "left_to_right", counter.debug_images_dir, counter.output_prefix)
+                return "left_to_right"
+            # 右→左: 中央線を以上→未満で通過
+            else:
+                person.crossed_direction = "right_to_left"
 
-        return "left_to_right"
-    # 右→左: 中央線を以上→未満で通過
-    elif (prev_x >= center_line_x and curr_x < center_line_x):
-        person.crossed_direction = "right_to_left"
+                # デバッグモードで画像を保存
+                if DEBUG_MODE and frame is not None:
+                    modules.save_debug_image(frame, person, center_line_x, "right_to_left", counter.debug_images_dir, counter.output_prefix)
 
-        # デバッグモードで画像を保存
-        if DEBUG_MODE and frame is not None:
-            modules.save_debug_image(frame, person, center_line_x, "right_to_left", counter.debug_images_dir, counter.output_prefix)
-
-        return "right_to_left"
+                return "right_to_left"
 
     return None
 
