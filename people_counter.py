@@ -16,7 +16,10 @@ from picamera2.devices.imx500.postprocess import scale_boxes
 import modules
 
 # ffmpegによるRTSP配信プロセス用
+import queue
+import threading
 import subprocess
+frame_queue = queue.Queue(maxsize=3)
 
 # 描画設定
 import cv2
@@ -108,8 +111,35 @@ last_log_time = 0
 RTSP_SERVER_IP = config.get('RTSP_SERVER_IP','None')
 RTSP_SERVER_PORT = 8554
 
+# ============ RTSPスレッドセットアップ ============
+def rtsp_writer_thread(ffmpeg_proc):
+    while True:
+        frame = frame_queue.get()
+        try:
+            ffmpeg_proc.stdin.write(frame.astype(np.uint8).tobytes())
+        except Exception as e:
+            print(f"[RTSP配信エラー]: {e}")
+        finally:
+            frame_queue.task_done()
+
+def start_rtsp_thread(ffmpeg_proc):
+    t = threading.Thread(target=rtsp_writer_thread, args=(ffmpeg_proc,), daemon=True)
+    t.start()
+    return t
+
+def send_frame_for_rtsp(frame):
+    try:
+        if frame_queue.full():
+            try:
+                frame_queue.get_nowait()
+            except queue.Empty:
+                pass
+        frame_queue.put_nowait(frame)
+    except queue.Full:
+        pass  # 複数同時発生時もスルー
+
+# ============ コールバック関数の属性を初期化 ============
 def init_process_frame_callback():
-    # コールバック関数の属性を初期化
     process_frame_callback.image_saved = False
     # グローバル変数をここで初期化 (mainでも行うが、コールバックが先に呼ばれる可能性も考慮)
     global active_people, counter
@@ -534,15 +564,14 @@ def process_frame_callback(request):
             cv2.putText(m.array, f"Remaining time: {remaining}sec", 
                         (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
-            if RTSP_SERVER_IP != 'None':
-                try:
-                    frame_for_rtsp = m.array
-                    if frame_for_rtsp.shape[2] == 4:
-                        frame_for_rtsp = cv2.cvtColor(frame_for_rtsp, cv2.COLOR_BGRA2BGR)
-                    if ffmpeg_proc and ffmpeg_proc.stdin:
-                        ffmpeg_proc.stdin.write(frame_for_rtsp.astype(np.uint8).tobytes())
-                except Exception as e:
-                    print(f"RTSP配信エラー: {e}")
+            # ========== RTSP非同期配信 ==========
+            if RTSP_SERVER_IP != 'None' and ffmpeg_proc and ffmpeg_proc.stdin:
+                frame_for_rtsp = m.array
+                # BGRA→BGR変換
+                if frame_for_rtsp.shape[2] == 4:
+                    frame_for_rtsp = cv2.cvtColor(frame_for_rtsp, cv2.COLOR_BGRA2BGR)
+                send_frame_for_rtsp(frame_for_rtsp)
+            # ===================================
 
         # ラインを横切った人をカウント
         for person in active_people:
@@ -560,6 +589,7 @@ def process_frame_callback(request):
                     # print(f"[DEBUG] {person.id} はまだ横断していません")
                     pass
 
+        # --- アクティブ人物リスト整理 ---
         # 古いトラッキング対象を削除 (last_seen が TRACKING_TIMEOUT を超えたもの)
         current_time = time.time()
         active_people = [p for p in active_people if current_time - p.last_seen < TRACKING_TIMEOUT]
@@ -676,6 +706,7 @@ if __name__ == "__main__":
             ]
             try:
                 ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+                rtsp_thread = start_rtsp_thread(ffmpeg_proc)
                 print("ffmpegによるRTSP配信プロセス起動")
             except Exception as e:
                 print(f"ffmpeg起動失敗: {e}")
