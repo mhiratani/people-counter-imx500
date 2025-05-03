@@ -337,6 +337,11 @@ def calculate_iou(box1, box2):
     x1, y1, w1, h1 = box1
     x2, y2, w2, h2 = box2
 
+    # 幅・高さの健全性チェック
+    if w1 < 0 or h1 < 0 or w2 < 0 or h2 < 0:
+        print(f"[Warning]:不正な矩形サイズ検出: box1={box1}, box2={box2}")
+        return 0.0
+
     # 計算しやすいように [x1, y1, x2, y2] 形式に変換する
     box1_tlbr = [x1, y1, x1 + w1, y1 + h1]
     box2_tlbr = [x2, y2, x2 + w2, y2 + h2]
@@ -363,7 +368,7 @@ def calculate_iou(box1, box2):
 
     return iou
 
-def track_people(detections, active_people):
+def track_people(detections, active_people, frame_id=None):
     """
     物体検出で得られた人物候補（detections）と、既存の追跡対象（active_people）を
     効率的かつ精度良くマッチングし、追跡リストを更新します。
@@ -424,39 +429,49 @@ def track_people(detections, active_people):
         # matched_person_indices: active_peopleのインデックスの配列
         # matched_detection_indices: detectionsのインデックスの配列
         # print("Will run linear_sum_assignment")
-        matched_person_indices, matched_detection_indices = linear_sum_assignment(cost_matrix)
+        try:
+            matched_person_indices, matched_detection_indices = linear_sum_assignment(cost_matrix)
 
-        # マッチング結果を処理
-        new_people = []
-        # マッチした検出結果のインデックスを記録
-        used_detections = set(matched_detection_indices)
+            # マッチング結果を処理
+            new_people = []
+            # マッチした検出結果のインデックスを記録
+            used_detections = set(matched_detection_indices)
 
-        # マッチした人物を更新して新しいリストに追加
-        for i, j in zip(matched_person_indices, matched_detection_indices):
-            # コストがinfの場合は有効なマッチではないのでスキップ (linear_sum_assignmentはinfも考慮する)
-            if cost_matrix[i, j] == np.inf:
-                continue
-            person = active_people[i]
-            detection = detections[j]
-            person.update(detection.box) # 人物情報を検出結果で更新
-            new_people.append(person)
-
-        # マッチしなかった既存の人物を新しいリストに追加 (タイムアウト判定は後で行われる)
-        matched_person_ids = {p.id for p in new_people} # 更新された人物のIDセット
-        for person in active_people:
-            if person.id not in matched_person_ids:
-                # この人物は今回のフレームでは検出されなかった
-                # 情報を更新しないままリストに追加。last_seenは前回のまま。
+            # マッチした人物を更新して新しいリストに追加
+            for i, j in zip(matched_person_indices, matched_detection_indices):
+                # コストがinfの場合は有効なマッチではないのでスキップ (linear_sum_assignmentはinfも考慮する)
+                if cost_matrix[i, j] == np.inf:
+                    continue
+                person = active_people[i]
+                detection = detections[j]
+                person.update(detection.box) # 人物情報を検出結果で更新
                 new_people.append(person)
 
-        # マッチしなかった新しい検出結果を新しい人物としてリストに追加
-        for j, detection in enumerate(detections):
-            if j not in used_detections:
-                new_people.append(Person(detection.box)) # 新しい人物を作成
+            # マッチしなかった既存の人物を新しいリストに追加 (タイムアウト判定は後で行われる)
+            matched_person_ids = {p.id for p in new_people} # 更新された人物のIDセット
+            for person in active_people:
+                if person.id not in matched_person_ids:
+                    # この人物は今回のフレームでは検出されなかった
+                    # 情報を更新しないままリストに追加。last_seenは前回のまま。
+                    new_people.append(person)
 
-        # ここではタイムアウト判定は行わない。process_frame_callbackでまとめて行う。
-        return new_people
+            # マッチしなかった新しい検出結果を新しい人物としてリストに追加
+            for j, detection in enumerate(detections):
+                if j not in used_detections:
+                    new_people.append(Person(detection.box)) # 新しい人物を作成
 
+            # ここではタイムアウト判定は行わない。process_frame_callbackでまとめて行う。
+            return new_people
+
+        except Exception as e:
+            print("【Error】ハンガリアン法(マッチング)で例外発生。")
+            print(f"例外内容：{e}")
+            print(f"フレームID: {frame_id}")
+            print(f"コスト行列 shape: {cost_matrix.shape}")
+            print(f"コスト行列の一部: {cost_matrix}")
+            print(f"検出結果一覧: {detections}")
+            print(f"追跡対象一覧: {active_people}")
+            return active_people
 
 def check_line_crossing(person, center_line_x, frame=None):
     """中央ラインを横切ったかチェック"""
@@ -508,7 +523,8 @@ def process_frame_callback(request):
             detections = parse_detections(metadata)
 
         # 人物追跡を更新
-        active_people = track_people(detections, active_people)
+        frame_id = getattr(request, 'seq_id', None)
+        active_people = track_people(detections, active_people, frame_id)
         if not isinstance(active_people, list):
             print(f"track_people returned : {type(active_people)}")
 
@@ -557,11 +573,11 @@ def process_frame_callback(request):
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             cv2.putText(m.array, f"left_to_right: {total_counts['left_to_right']}", 
                     (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
-            # 経過時間表示
-            elapsed = int(time.time() - counter.last_save_time)
-            remaining = COUNTING_INTERVAL - elapsed
-            cv2.putText(m.array, f"Remaining time: {remaining}sec", 
+            
+            # 時刻とフレームIDを表示
+            timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            text_str = f"FrameID: {frame_id} / {timestamp}"
+            cv2.putText(m.array, text_str,
                         (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
             # ========== RTSP非同期配信 ==========
