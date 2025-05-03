@@ -221,36 +221,32 @@ class PeopleCounter:
         }
 
     def save_to_json(self):
-        """指定間隔でカウントデータをJSONファイルに保存"""
+        """カウントデータをJSONファイルに保存"""
         current_time = time.time()
-        # 指定間隔経過したらデータを保存
-        if current_time - self.last_save_time >= COUNTING_INTERVAL:
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-            data = {
-                "timestamp": timestamp,
-                "duration_seconds": int(current_time - self.last_save_time),
-                "period_counts": self.get_counts(),
-                "total_counts": self.get_total_counts()
-            }
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        data = {
+            "timestamp": timestamp,
+            "duration_seconds": int(current_time - self.last_save_time),
+            "period_counts": self.get_counts(),
+            "total_counts": self.get_total_counts()
+        }
 
-            # ファイルパスを正しく構築
-            filename = os.path.join(self.date_dir, f"{self.output_prefix}_{timestamp}.json")
-            try:
-                with open(filename, 'w') as f:
-                    json.dump(data, f, indent=4)
+        # ファイルパスを正しく構築
+        filename = os.path.join(self.date_dir, f"{self.output_prefix}_{timestamp}.json")
+        try:
+            with open(filename, 'w') as f:
+                json.dump(data, f, indent=4)
 
-                print(f"Data saved to {filename}")
+            print(f"Data saved to {filename}")
 
-                # 期間カウンターのみリセット
-                self.right_to_left = 0
-                self.left_to_right = 0
-                self.last_save_time = current_time
-                return True
-            except Exception as e:
-                print(f"Failed to save data to {filename}: {e}")
-                return False # 保存失敗
-
-        return False
+            # 期間カウンターのみリセット
+            self.right_to_left = 0
+            self.left_to_right = 0
+            self.last_save_time = current_time
+            return True
+        except Exception as e:
+            print(f"Failed to save data to {filename}: {e}")
+            return False # 保存失敗
 
 
 # ======= 検出と追跡の関数 =======
@@ -623,10 +619,12 @@ def process_frame_callback(request):
             print(f"Next save in: {remaining} seconds")
             print(f"--------------------------------------------------")
 
-        last_log_time = current_time
 
         # 指定間隔ごとにJSONファイルに保存
-        counter.save_to_json()
+        if current_time - counter.last_save_time >= COUNTING_INTERVAL:
+            counter.save_to_json()
+            
+        last_log_time = current_time
 
     except Exception as e:
         print(f"コールバックエラー: {e}")
