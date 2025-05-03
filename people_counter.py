@@ -509,6 +509,9 @@ def process_frame_callback(request):
     try:
         # メタデータを取得
         metadata = request.get_metadata()
+        # SensorTimestampをframe_idに利用
+        frame_id = metadata.get('SensorTimestamp')
+        print(f"frame_id={frame_id}")
         if metadata is None:
             # print("メタデータがNoneです") # デバッグ用
             # メタデータがない場合でも、既存のactive_peopleはタイムアウトで削除する必要があるため処理を進める
@@ -519,7 +522,6 @@ def process_frame_callback(request):
             detections = parse_detections(metadata)
 
         # 人物追跡を更新
-        frame_id = getattr(request, 'seq_id', None)
         active_people = track_people(detections, active_people, frame_id)
         if not isinstance(active_people, list):
             print(f"track_people returned : {type(active_people)}")
@@ -574,7 +576,7 @@ def process_frame_callback(request):
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             text_str = f"FrameID: {frame_id} / {timestamp}"
             cv2.putText(m.array, text_str,
-                        (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                        (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
             # ========== RTSP非同期配信 ==========
             if RTSP_SERVER_IP != 'None' and ffmpeg_proc and ffmpeg_proc.stdin:
@@ -623,7 +625,7 @@ def process_frame_callback(request):
         # 指定間隔ごとにJSONファイルに保存
         if current_time - counter.last_save_time >= COUNTING_INTERVAL:
             counter.save_to_json()
-            
+
         last_log_time = current_time
 
     except Exception as e:
@@ -705,6 +707,8 @@ if __name__ == "__main__":
 
             ffmpeg_cmd = [
                 "ffmpeg",
+                "-nostats",
+                "-loglevel", "error", 
                 "-re",
                 "-f", "rawvideo",
                 "-pix_fmt", "bgr24",
