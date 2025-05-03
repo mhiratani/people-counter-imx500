@@ -13,11 +13,6 @@ from picamera2.devices import IMX500
 from picamera2.devices.imx500 import (NetworkIntrinsics, postprocess_nanodet_detection)
 from picamera2.devices.imx500.postprocess import scale_boxes
 
-
-from tensorflow.keras.applications import MobileNetV2
-from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
-mobilenet = MobileNetV2(include_top=False, pooling='avg', input_shape=(96,96,3), weights='imagenet')
-
 import modules
 
 # ffmpegによるRTSP配信プロセス用
@@ -35,7 +30,6 @@ TEXT_COLOR = (0, 0, 255) # Red
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 FONT_SCALE = 0.8
 THICKNESS = 2
-
 
 # モデル設定
 # https://www.raspberrypi.com/documentation/accessories/ai-camera.html の
@@ -144,24 +138,6 @@ def send_frame_for_rtsp(frame):
     except queue.Full:
         pass  # 複数同時発生時もスルー
 
-def extract_appearance_feature(image, box):
-    """box=(x,y,w,h)の部分を96x96で切り抜き特徴ベクトルに変換"""
-    x, y, w, h = map(int, box)
-    crop = image[max(0,y):max(0,y+h), max(0,x):max(0,x+w)]
-    if crop.size == 0: return np.zeros((1280,), dtype=np.float32)
-    crop = cv2.resize(crop, (96,96))
-    crop = preprocess_input(crop.astype(np.float32))
-    feature = mobilenet.predict(crop[None], verbose=0)[0]
-    # L2正規化して比較しやすく
-    feature = feature / (np.linalg.norm(feature) + 1e-9)
-    return feature
-
-def appearance_distance(f1, f2):
-    """コサイン類似度"""
-    if f1 is None or f2 is None:
-        return 1.0  # 極端に違う扱い
-    return 1.0 - np.d
-
 # ============ コールバック関数の属性を初期化 ============
 def init_process_frame_callback():
     process_frame_callback.image_saved = False
@@ -185,7 +161,7 @@ class Detection:
 class Person:
     next_id = 0
 
-    def __init__(self, box, appearance=None):
+    def __init__(self, box):
         self.id = Person.next_id
         Person.next_id += 1
         self.box = box # [x, y, w, h] 形式
@@ -193,22 +169,20 @@ class Person:
         self.first_seen = time.time()
         self.last_seen = time.time()
         self.crossed_direction = None
-        self.appearance = appearance
 
     def get_center(self):
         """バウンディングボックスの中心座標を取得"""
         x, y, w, h = self.box
         return (x + w//2, y + h//2)
 
-    def update(self, box, appearance=None):
+    def update(self, box):
         """新しい検出結果で人物の情報を更新"""
         self.box = box # [x, y, w, h] 形式
         self.trajectory.append(self.get_center())
         if len(self.trajectory) > 30:  # 軌跡は最大30ポイントまで保持
             self.trajectory.pop(0)
         self.last_seen = time.time()
-        if appearance is not None:
-            self.appearance = appearance
+
 
 class PeopleCounter:
     def __init__(self, start_time, output_dir=OUTPUT_DIR, output_prefix=OUTPUT_PREFIX, date_dir=DATE_DIR, debug_images_dir=DEBUG_IMAGES_DIR):
@@ -409,15 +383,12 @@ def track_people(detections, active_people, frame_id=None):
 
     # 追跡対象がいない場合、全ての検出を新しい人物とする
     if num_people == 0:
-        return [Person(det.box, det.appearance) for det in detections]
+        return [Person(det.box) for det in detections]
 
     # コスト行列を作成
     # 行: active_people, 列: detections
     # コストは小さいほど良い。マッチング不可能なペアには大きな値 (inf) を設定
-    alpha = 1.0
-    beta = 2.0
-    gamma = 1.0  # appearance重み
-    cost_matrix = np.full((len(active_people), len(detections)), np.inf)
+    cost_matrix = np.full((num_people, num_detections), np.inf)
 
     # コスト行列を計算
     for i, person in enumerate(active_people):
@@ -433,9 +404,9 @@ def track_people(detections, active_people, frame_id=None):
             distance = np.sqrt((person_center[0] - detection_center[0])**2 + (person_center[1] - detection_center[1])**2)
             iou = calculate_iou(person_box, detection_box)
 
-            app_dist = appearance_distance(person.appearance, detection.appearance)
-            cost = alpha * (distance/200.0) + beta*(1-iou) + gamma*app_dist
-            cost_matrix[i,j] = cost
+            # 多少広めに許容する
+            cost = (1.0 - iou) + (distance / 200.0)  # 200pxを仮の最大とする
+            cost_matrix[i, j] = cost
 
     # コスト行列の全要素がinf or どの行or列も全てinfならreturn
     if (
@@ -467,7 +438,7 @@ def track_people(detections, active_people, frame_id=None):
                 if cost_matrix[i,j] < MAX_COST:
                     person = active_people[i]
                     detection = detections[j]
-                    person.update(detection.box, detection.appearance)
+                    person.update(detection.box)
                     new_people.append(person)
                 else:
                     pass # 不一致
@@ -475,7 +446,7 @@ def track_people(detections, active_people, frame_id=None):
             # マッチしなかった新しい検出結果を新しい人物としてリストに追加
             for j, detection in enumerate(detections):
                 if j not in used_detections:
-                    new_people.append(Person(detection.box, detection.appearance))  # 新しい人物を作成
+                    new_people.append(Person(detection.box))  # 新しい人物を作成
             # 失踪した人物も追加
             for i, person in enumerate(active_people):
                 if i not in used_person:
@@ -544,8 +515,6 @@ def process_frame_callback(request):
         else:
             # 検出処理
             detections = parse_detections(metadata)
-            for det in detections:
-                det.appearance = extract_appearance_feature(request.frame, det.box)
 
         # 人物追跡を更新
         active_people = track_people(detections, active_people, frame_id)
