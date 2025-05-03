@@ -381,15 +381,15 @@ def track_people(detections, active_people, lost_people, frame_id, center_line_x
 
     # 検出結果も追跡対象もいない場合はそのまま返す
     if num_detections == 0 and num_people == 0:
-        return []
+        return [], lost_people
 
     # 新しい検出結果がない場合、既存の追跡対象は維持（ただし後にタイムアウトで削除される）
     if num_detections == 0:
-        return active_people
+        return active_people, lost_people
 
     # 追跡対象がいない場合、全ての検出を新しい人物とする
     if num_people == 0:
-        return [Person(det.box) for det in detections]
+        return [Person(det.box) for det in detections], lost_people
 
     # コスト行列を作成
     # 行: active_people, 列: detections
@@ -422,7 +422,7 @@ def track_people(detections, active_people, lost_people, frame_id, center_line_x
         np.sum(np.isfinite(cost_matrix)) < max(cost_matrix.shape)   # 有限値の要素数 < 行or列の大きいほう（マッチングに必要な最小数）なら諦める
     ):
         # print("Assignment infeasible: some row or column is all inf.")
-        return active_people
+        return active_people, lost_people
     else:
         # ハンガリアンアルゴリズムを実行し、最適なマッチングを見つける
         # matched_person_indices: active_peopleのインデックスの配列
@@ -505,7 +505,7 @@ def track_people(detections, active_people, lost_people, frame_id, center_line_x
             print(f"コスト行列の一部: {cost_matrix}")
             print(f"検出結果一覧: {detections}")
             print(f"追跡対象一覧: {active_people}")
-            return active_people
+            return active_people, lost_people
 
 def check_line_crossing(person, center_line_x, frame=None):
     """中央ラインを横切ったかチェック"""
