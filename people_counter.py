@@ -604,16 +604,13 @@ def process_frame_callback(request):
             
             # カウント情報を表示
             total_counts = counter.get_total_counts()
-            cv2.putText(m.array, f"right_to_left: {total_counts['right_to_left']}", 
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            cv2.putText(m.array, f"left_to_right: {total_counts['left_to_right']}", 
-                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            
+            cv2.putText(m.array, f"right_to_left: {total_counts['right_to_left']}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.putText(m.array, f"left_to_right: {total_counts['left_to_right']}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             # 時刻とフレームIDを表示
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            text_str = f"FrameID: {frame_id} / {timestamp}"
-            cv2.putText(m.array, text_str,
-                        (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            text_str = f"FrameID: {frame_id} / {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            cv2.putText(m.array, text_str, (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+
+            frame = m.array.copy()  # デバッグ画像保存用
 
             # ========== RTSP非同期配信 ==========
             if RTSP_SERVER_IP != 'None' and ffmpeg_proc and ffmpeg_proc.stdin:
@@ -628,7 +625,7 @@ def process_frame_callback(request):
         for person in active_people:
             # 少なくとも2フレーム以上の軌跡がある人物が対象
             if len(person.trajectory) >= 2:
-                direction = check_line_crossing(person, center_line_x, m.array)
+                direction = check_line_crossing(person, center_line_x, frame)
                 # print(f"[DEBUG] 人物ID {person.id} のライン判定")
                 # print(f"[DEBUG] 軌跡: {person.trajectory[-2:]} (最後の2点を表示)")
                 # distances = [abs(xy[0] - center_line_x) for xy in person.trajectory[-2:]]
