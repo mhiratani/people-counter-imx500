@@ -93,6 +93,7 @@ MAX_DETECTIONS = config.get('MAX_DETECTIONS', 30)
 
 TRACKING_TIMEOUT = config.get('TRACKING_TIMEOUT', 5.0)      # 人物を追跡し続ける最大時間（秒）
 COUNTING_INTERVAL = config.get('COUNTING_INTERVAL', 60)     # カウントデータを保存する間隔（秒）
+MIN_BOX_HEIGHT = config.get('COUNTING_INTERVAL', 50)        # 人物ボックスの高さフィルタ。これより小さいBoxは排除(ピクセル)
 
 # 出力設定
 OUTPUT_DIR = config.get('OUTPUT_DIR', 'people_count_data')  # データ保存ディレクトリ
@@ -345,9 +346,10 @@ def parse_detections(metadata: dict):
             for box_coords, score, category in zip(boxes, scores, classes)
             if score > DETECTION_THRESHOLD and int(category) == PERSON_CLASS_ID
         ]
-
         # Detectionオブジェクト作成時に convert_inference_coords が呼ばれるため、
         # ここで取得した box は既にフレームサイズに合わせた [x, y, w, h] 形式になっているはず
+        # ボックスの高さでもフィルタ
+        detections = [det for det in detections if det.box[3] >= MIN_BOX_HEIGHT]
 
         return detections
     except Exception as e:
@@ -694,6 +696,9 @@ def process_frame_callback(request):
                 
                 # ID表示
                 cv2.putText(m.array, f"ID: {person.id}", (x, y - 10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                # ボックスの高さ表示
+                cv2.putText(m.array, f"H: {int(h)}", (x, y + h + 15), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
                 
                 # 軌跡を描画
