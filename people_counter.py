@@ -512,6 +512,9 @@ def check_line_crossing(person, center_line_x, frame=None):
     if len(person.trajectory) < 2:
         return None
 
+    if person.crossed_direction is not None:
+        return None
+
     for i in range(1, len(person.trajectory)):
         prev_x = person.trajectory[i-1][0]
         curr_x = person.trajectory[i][0]
