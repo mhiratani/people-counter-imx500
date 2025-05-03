@@ -424,23 +424,39 @@ def track_people(detections, active_people, lost_people, frame_id, center_line_x
     # コストは小さいほど良い。マッチング不可能なペアには大きな値 (inf) を設定
     cost_matrix = np.full((num_people, num_detections), np.inf)
 
-    # コスト行列を計算
+    # コスト行列を計算するループ
+    # 既存の追跡ターゲット（active_people）と新たな検出結果（detections）との間で、
+    # 各組み合わせペアごとに「重なり具合（IoU）」と「中心間距離」を算出し、総合的なコストを定義。
     for i, person in enumerate(active_people):
-        # 追跡対象の予測位置（ここではシンプルに最新の位置を使用）
+        # 追跡対象「person」の直近検出ボックスおよび中心座標を取得
         person_box = person.box
-        person_center = person.get_center()
+        person_center = person.get_center()  # (x, y)形式（追跡履歴から取得）
 
         for j, detection in enumerate(detections):
             detection_box = detection.box
-            detection_center = (detection_box[0] + detection_box[2]//2, detection_box[1] + detection_box[3]//2)
+            # 検出ボックスの中心座標（x, y）を計算
+            detection_center = (
+                detection_box[0] + detection_box[2] // 2,  # x + w/2
+                detection_box[1] + detection_box[3] // 2   # y + h/2
+            )
 
-            # 距離とIOUを計算
-            distance = np.sqrt((person_center[0] - detection_center[0])**2 + (person_center[1] - detection_center[1])**2)
+            # --- 距離・IoU計算 ---
+            # ボックス中心座標間のユークリッド距離（ピクセル単位）
+            distance = np.sqrt(
+                (person_center[0] - detection_center[0]) ** 2 +
+                (person_center[1] - detection_center[1]) ** 2
+            )
+            # 2つのバウンディングボックスのIoU（重なり率）を計算
             iou = calculate_iou(person_box, detection_box)
 
-            # 多少広めに許容する
-            cost = (1.0 - iou) + (distance / 200.0)  # 200pxを仮の最大とする
-            cost_matrix[i, j] = cost
+            # --- 総合コストの定義 ---
+            # 距離が近くIoUが大きい（よく重なっている）ほどコストが小さくなるよう設計
+            # 例: 距離200px以上はコスト+1, IoU 1.0→加点ゼロ, IoU 0→+1
+            # → トラッキング割り当てアルゴリズム（例: ハンガリアン法等）で最小コスト割付
+            cost = (1.0 - iou) + (distance / 200.0)  # 200pxを「最大許容距離」とするスケーリング
+
+            cost_matrix[i, j] = cost  # コスト行列の値を格納
+
 
     # コスト行列の全要素がinf or どの行or列も全てinfならreturn
     if (
