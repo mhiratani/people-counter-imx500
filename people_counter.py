@@ -142,8 +142,9 @@ def send_frame_for_rtsp(frame):
 def init_process_frame_callback():
     process_frame_callback.image_saved = False
     # グローバル変数をここで初期化 (mainでも行うが、コールバックが先に呼ばれる可能性も考慮)
-    global active_people, counter
+    global active_people, counter, lost_people
     active_people = []
+    lost_people = [] 
     # counterはmainで初期化されるはずだが、念のためNoneチェック
     if counter is None:
         counter = PeopleCounter(time.time(), OUTPUT_DIR, OUTPUT_PREFIX, DATE_DIR, DEBUG_IMAGES_DIR)
@@ -157,6 +158,9 @@ class Detection:
         self.conf = conf
         self.box = imx500.convert_inference_coords(coords, metadata, picam2) # [x, y, w, h] 形式
 
+    def get_center(self):
+        x, y, w, h = self.box
+        return (x + w//2, y + h//2)
 
 class Person:
     next_id = 0
@@ -169,6 +173,8 @@ class Person:
         self.first_seen = time.time()
         self.last_seen = time.time()
         self.crossed_direction = None
+        self.lost_start_time = None
+        self.lost_last_box = None
 
     def get_center(self):
         """バウンディングボックスの中心座標を取得"""
@@ -364,7 +370,7 @@ def calculate_iou(box1, box2):
 
     return iou
 
-def track_people(detections, active_people, frame_id=None):
+def track_people(detections, active_people,lost_people, frame_id, center_line_x):
     """
     物体検出で得られた人物候補（detections）と、既存の追跡対象（active_people）を
     効率的かつ精度良くマッチングし、追跡リストを更新します。
@@ -452,8 +458,44 @@ def track_people(detections, active_people, frame_id=None):
                 if i not in used_person:
                     new_people.append(person)
 
+            # ここで new_people(=今期マッチ分)に含まれなかったactive_peopleは「一時ロスト」の候補
+            now = time.time()
+            ACTIVE_TIMEOUT = 1.0  # lost_people保持猶予(秒)（状況で要調整）
+
+            # マッチしなかったactive_people→lost_peopleへ
+            for i, person in enumerate(active_people):
+                if i not in used_person:
+                    person.lost_start_time = now
+                    person.lost_last_box = person.box
+                    lost_people.append(person)
+
+            # lost_peopleからも「復帰」判定！
+            recovered = []
+            for detection in detections:
+                for lost_person in lost_people:
+                    # [復帰条件] 距離/IOU/ライン近傍/経過時間
+                    lost_cx, _ = lost_person.get_center()
+                    det_cx, _ = detection.get_center()
+                    # ライン中心の±20px・距離50px以内・ロストから1秒以内など
+                    if center_line_x and (abs(lost_cx - center_line_x) < 20 and abs(det_cx - lost_cx) < 50 and now - lost_person.lost_start_time < ACTIVE_TIMEOUT):
+                        lost_person.update(detection.box)
+                        new_people.append(lost_person)
+                        recovered.append(lost_person)
+                        break  # 1人あたり復帰1回だけ
+
+            # 復帰したlost_personをlost_peopleから除く
+            lost_people = [p for p in lost_people if p not in recovered]
+            # 完全ロスト判定
+            lost_people = [p for p in lost_people if now - p.lost_start_time < ACTIVE_TIMEOUT]
+
+            # new_peopleに含まれないdetectionsは新規ID化
+            for j, detection in enumerate(detections):
+                match_found = any([detection.box == p.box for p in new_people])  # だいたいbox一致を使う、orフラグでもOK
+                if not match_found:
+                    new_people.append(Person(detection.box))
+
             print("distance=", distance, "iou=", iou)
-            return new_people
+            return new_people, lost_people
 
         except Exception as e:
             print("【Error】ハンガリアン法(マッチング)で例外発生。")
@@ -501,7 +543,10 @@ def process_frame_callback(request):
     # 関数の属性が初期化されていない場合は初期化
     if not hasattr(process_frame_callback, 'image_saved'):
         init_process_frame_callback() # ここでactive_peopleとcounterも初期化される
-
+        
+    with MappedArray(request, 'main') as m:
+        frame = m.array.copy()
+        
     try:
         # メタデータを取得
         metadata = request.get_metadata()
@@ -517,23 +562,20 @@ def process_frame_callback(request):
             detections = parse_detections(metadata)
 
         # 人物追跡を更新
-        active_people = track_people(detections, active_people, frame_id)
+        frame_height, frame_width = frame.shape[:2]
+        center_line_x = frame_width // 2
+        active_people ,lost_people = track_people(detections, active_people, lost_people, frame_id, center_line_x)
         if not isinstance(active_people, list):
             print(f"track_people returned : {type(active_people)}")
 
-        # フレームサイズを取得 (デバッグ画像保存やライン描画で使用)
-        with MappedArray(request, 'main') as m:
-            frame_height, frame_width = m.array.shape[:2]
-            center_line_x = frame_width // 2
-            frame = m.array.copy()
-
+        if frame is not None:
             # 起動時の画像を一度だけ保存
             if not process_frame_callback.image_saved:
-                modules.save_image_at_startup(m.array, center_line_x, counter.date_dir, counter.output_prefix)
+                modules.save_image_at_startup(frame, center_line_x, counter.date_dir, counter.output_prefix)
                 process_frame_callback.image_saved = True
 
             # 中央ラインを描画
-            cv2.line(m.array, (center_line_x, 0), (center_line_x, frame_height), 
+            cv2.line(frame, (center_line_x, 0), (center_line_x, frame_height), 
                     (255, 255, 0), 2)
             
             # 人物の検出ボックスと軌跡を描画
@@ -549,33 +591,33 @@ def process_frame_callback(request):
                     color = (255, 255, 255)  # 白: まだカウントされていない
                 
                 # 検出ボックスを描画
-                cv2.rectangle(m.array, (x, y), (x + w, y + h), color, 2)
+                cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
                 
                 # ID表示
-                cv2.putText(m.array, f"ID: {person.id}", (x, y - 10), 
+                cv2.putText(frame, f"ID: {person.id}", (x, y - 10), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
                 
                 # 軌跡を描画
                 if len(person.trajectory) > 1:
                     for i in range(1, len(person.trajectory)):
-                        cv2.line(m.array, person.trajectory[i-1], person.trajectory[i], color, 2)
+                        cv2.line(frame, person.trajectory[i-1], person.trajectory[i], color, 2)
             
             # カウント情報を表示
             total_counts = counter.get_total_counts()
-            cv2.putText(m.array, f"right_to_left: {total_counts['right_to_left']}", 
+            cv2.putText(frame, f"right_to_left: {total_counts['right_to_left']}", 
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            cv2.putText(m.array, f"left_to_right: {total_counts['left_to_right']}", 
+            cv2.putText(frame, f"left_to_right: {total_counts['left_to_right']}", 
                     (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
             # 時刻とフレームIDを表示
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             text_str = f"FrameID: {frame_id} / {timestamp}"
-            cv2.putText(m.array, text_str,
+            cv2.putText(frame, text_str,
                         (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
             # ========== RTSP非同期配信 ==========
             if RTSP_SERVER_IP != 'None' and ffmpeg_proc and ffmpeg_proc.stdin:
-                frame_for_rtsp = m.array
+                frame_for_rtsp = frame
                 # BGRA→BGR変換
                 if frame_for_rtsp.shape[2] == 4:
                     frame_for_rtsp = cv2.cvtColor(frame_for_rtsp, cv2.COLOR_BGRA2BGR)
@@ -735,6 +777,7 @@ if __name__ == "__main__":
 
     # 人物追跡とカウントの初期化
     active_people = [] # グローバル変数として初期化
+    lost_people = [] 
     start_time = time.time()
     counter = PeopleCounter(start_time, OUTPUT_DIR, OUTPUT_PREFIX, DATE_DIR, DEBUG_IMAGES_DIR) # グローバル変数として初期化
     last_log_time = start_time
