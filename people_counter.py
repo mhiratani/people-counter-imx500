@@ -144,32 +144,24 @@ def send_frame_for_rtsp(frame):
     except queue.Full:
         pass  # 複数同時発生時もスルー
 
-def extract_appearance_features(image, boxes):
-    crops = []
-    for box in boxes:
-        x, y, w, h = map(int, box)
-        crop = image[max(0, y):max(0, y + h), max(0, x):max(0, x + w)]
-        if crop.size == 0:
-            crops.append(np.zeros((96, 96, 3), dtype=np.float32))
-            continue
-        # チャンネル変換（4ch, 3ch対応）
-        if crop.ndim == 3:
-            if crop.shape[2] == 4:      # BGRA→RGB
-                crop = cv2.cvtColor(crop, cv2.COLOR_BGRA2RGB)
-            elif crop.shape[2] == 3:    # BGR→RGB
-                crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-        else:
-            # グレースケールなどは3chに変換
-            crop = cv2.cvtColor(crop, cv2.COLOR_GRAY2RGB)
-        crop = cv2.resize(crop, (96, 96))
-        crops.append(crop.astype(np.float32))
-    if not crops:
-        return []
-    crops = np.stack(crops)
-    crops = preprocess_input(crops)
-    features = mobilenet.predict(crops, verbose=0)
-    features = features / (np.linalg.norm(features, axis=1, keepdims=True) + 1e-9)
-    return features
+def extract_appearance_feature(image, box):
+    """box=(x,y,w,h)の部分を96x96で切り抜き特徴ベクトルに変換"""
+    x, y, w, h = map(int, box)
+    crop = image[max(0,y):max(0,y+h), max(0,x):max(0,x+w)]
+    if crop.size == 0:
+        return np.zeros((1280,), dtype=np.float32)
+    crop = cv2.resize(crop, (96,96))
+
+    if crop.shape[2] == 4:       # 4ch(XRGB/BGRAなど)→3ch(RGB)
+        crop = cv2.cvtColor(crop, cv2.COLOR_BGRA2RGB)
+    elif crop.shape[2] == 3:     # 3chの場合はBGR→RGB
+        crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+
+    crop = preprocess_input(crop.astype(np.float32))
+    feature = mobilenet.predict(crop[None], verbose=0)[0]
+    # L2正規化して比較しやすく
+    feature = feature / (np.linalg.norm(feature) + 1e-9)
+    return feature
 
 def appearance_distance(f1, f2):
     """コサイン類似度（小さいほど似ている）"""
@@ -564,12 +556,8 @@ def process_frame_callback(request):
         else:
             # 検出処理
             detections = parse_detections(metadata)
-            if detections:
-                boxes = [det.box for det in detections]
-                features = extract_appearance_features(frame, boxes)
-                for det, feature in zip(detections, features):
-                    det.appearance = feature
-
+            for det in detections:
+                det.appearance = extract_appearance_feature(frame, det.box)
 
         # 人物追跡を更新
         active_people = track_people(detections, active_people, frame_id)
