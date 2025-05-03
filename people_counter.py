@@ -511,7 +511,6 @@ def process_frame_callback(request):
         metadata = request.get_metadata()
         # SensorTimestampをframe_idに利用
         frame_id = metadata.get('SensorTimestamp')
-        print(f"frame_id={frame_id}")
         if metadata is None:
             # print("メタデータがNoneです") # デバッグ用
             # メタデータがない場合でも、既存のactive_peopleはタイムアウトで削除する必要があるため処理を進める
