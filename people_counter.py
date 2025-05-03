@@ -164,10 +164,13 @@ def extract_appearance_feature(image, box):
     return feature
 
 def appearance_distance(f1, f2):
-    """コサイン類似度"""
+    """コサイン類似度（小さいほど似ている）"""
     if f1 is None or f2 is None:
-        return 1.0  # 極端に違う扱い
-    return 1.0 - np.d
+        return 1.0  # 極端に違う扱いにする
+    # 内積とノルムを使ってコサイン類似度を算出
+    cos_sim = np.dot(f1, f2) / (np.linalg.norm(f1) * np.linalg.norm(f2) + 1e-8)
+    # 似ているほど距離がゼロ、異なるほど1に近づくように変換
+    return 1.0 - cos_sim
 
 # ============ コールバック関数の属性を初期化 ============
 def init_process_frame_callback():
