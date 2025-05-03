@@ -370,7 +370,7 @@ def calculate_iou(box1, box2):
 
     return iou
 
-def track_people(detections, active_people,lost_people, frame_id, center_line_x):
+def track_people(detections, active_people, lost_people, frame_id, center_line_x):
     """
     物体検出で得られた人物候補（detections）と、既存の追跡対象（active_people）を
     効率的かつ精度良くマッチングし、追跡リストを更新します。
@@ -538,7 +538,7 @@ def check_line_crossing(person, center_line_x, frame=None):
 
 def process_frame_callback(request):
     """フレームごとの処理を行うコールバック関数"""
-    global active_people, counter, last_log_time
+    global active_people, lost_people, counter, last_log_time
 
     # 関数の属性が初期化されていない場合は初期化
     if not hasattr(process_frame_callback, 'image_saved'):
