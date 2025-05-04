@@ -117,12 +117,6 @@ vim camera_name.json
 # プログラム実行(RTSP配信したい場合はRTSP_SERVER_IPを記載したら動作します)
 python people_counter.py
 
-# ヘッドレス環境の場合
-python people_counter_non_gui.py
-
-# ヘッドレス環境で映像をRTSP配信したい場合
-python people_counter_rtsp_stream.py
-
 # ラズパイ側で解析しないで、データを流してサーバ側で解析したい場合
 python people_detection_stream.py
 
