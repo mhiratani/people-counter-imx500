@@ -91,9 +91,26 @@ MAX_DETECTIONS = config.get('MAX_DETECTIONS', 30)
 # - 現場映像の最大混雑人数よりやや余裕を持たせると安定。
 # ----------------------------------------------
 
+CENTER_LINE_MARGIN_PX = config.get('CENTER_LINE_MARGIN_PX', 50)
+# ----------------------------------------------------------
+# ライン中心から±何ピクセルを「ライン近傍」とみなすかの閾値（ピクセル数）。
+# - 中心からこの範囲内にいれば「ライン付近」と判定される。
+# - 広すぎると誤判定が増えるが、狭すぎると本来ライン近傍の人を逃しやすくなる。
+# - 実際のカメラ画角やライン検出精度、利用目的に応じて調整のこと。
+# ----------------------------------------------------------
+
+RECOVERY_DISTANCE_PX = config.get('RECOVERY_DISTANCE_PX', 200)
+# ----------------------------------------------------------
+# 復帰判定時に、過去の人物と新しい検出の中心座標（x）の距離が
+# 何ピクセル以内なら「同一人物が復帰した」とみなすかの閾値。
+# - この距離以内であれば、lost_peopleリストから追跡を再開する。
+# - 値が大きいと誤復帰（他人を繋ぐ）リスク、値が小さいと復帰し損なうリスクがある。
+# - 映像解像度や1フレームあたりの人の移動量に応じて適宜調整。
+# ----------------------------------------------------------
+
 TRACKING_TIMEOUT = config.get('TRACKING_TIMEOUT', 5.0)      # 人物を追跡し続ける最大時間（秒）
 COUNTING_INTERVAL = config.get('COUNTING_INTERVAL', 60)     # カウントデータを保存する間隔（秒）
-MIN_BOX_HEIGHT = config.get('COUNTING_INTERVAL', 50)        # 人物ボックスの高さフィルタ。これより小さいBoxは排除(ピクセル)
+MIN_BOX_HEIGHT = config.get('MIN_BOX_HEIGHT', 50)        # 人物ボックスの高さフィルタ。これより小さいBoxは排除(ピクセル)
 
 # 出力設定
 OUTPUT_DIR = config.get('OUTPUT_DIR', 'people_count_data')  # データ保存ディレクトリ
@@ -563,15 +580,15 @@ def track_people(detections, active_people, lost_people, frame_id, center_line_x
                     # [復帰条件] 距離/IOU/ライン近傍/経過時間
                     lost_cx, _ = lost_person.get_center()
                     det_cx, _ = detection.get_center()
-                    avg_dx, avg_dy = lost_person.get_avg_motion(window=5)
+                    avg_dx, avg_dy = lost_person.get_avg_motion()
                     diff_x = det_cx - lost_cx
                     # 移動平均の符号が一致（右なら右，左なら左へ離れてる）
                     same_direction = (avg_dx * diff_x > 0)  
-                    # ライン中心の±20px・距離100px以内・ACTIVE_TIMEOUT秒以内など
+                    # ライン中心距離(CENTER_LINE_MARGIN_PX)ピクセル以内・距離(RECOVERY_DISTANCE_PX)ピクセル以内・ACTIVE_TIMEOUT秒以内など
                     if (
                         center_line_x and
-                        abs(lost_cx - center_line_x) < 45 and
-                        abs(diff_x) < 100 and
+                        abs(lost_cx - center_line_x) < CENTER_LINE_MARGIN_PX and
+                        abs(diff_x) < RECOVERY_DISTANCE_PX  and
                         now - lost_person.lost_start_time < ACTIVE_TIMEOUT and
                         same_direction
                     ):
@@ -678,7 +695,13 @@ def process_frame_callback(request):
             # 中央ラインを描画
             cv2.line(m.array, (center_line_x, 0), (center_line_x, frame_height), 
                     (255, 255, 0), 2)
-            
+
+            # CENTER_LINE_MARGINを描画
+            cv2.line(m.array, (center_line_x - CENTER_LINE_MARGIN_PX, 0), (center_line_x - CENTER_LINE_MARGIN_PX, frame_height), 
+                    (0, 128, 255), 2)
+            cv2.line(m.array, (center_line_x + CENTER_LINE_MARGIN_PX, 0), (center_line_x + CENTER_LINE_MARGIN_PX, frame_height), 
+                    (0, 128, 255), 2)
+
             # 人物の検出ボックスと軌跡を描画
             for person in active_people:
                 x, y, w, h = person.box
