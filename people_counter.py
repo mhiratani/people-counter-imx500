@@ -96,6 +96,7 @@ class RTSP:
         self.ffmpeg_proc = self.rtsp_setting(intrinsics)
         # ffmpegプロセスへデータを書き込むスレッドの起動
         self.rtsp_thread = self.start_rtsp_thread(self.ffmpeg_proc)
+        self.active = True  # 配信中フラグ
 
     def rtsp_writer_thread(self, ffmpeg_proc):
         """
@@ -109,6 +110,7 @@ class RTSP:
                 ffmpeg_proc.stdin.write(frame.astype(np.uint8).tobytes())
             except Exception as e:
                 print(f"[RTSP配信エラー]: {e}")
+                self.active = False  # 配信停止
             finally:
                 self.frame_queue.task_done()
 
@@ -129,6 +131,9 @@ class RTSP:
         Args:
             frame (np.ndarray): 配信したいフレーム
         """
+        if not self.active:
+            print("RTSP配信は既に停止しています")
+            return
         try:
             if self.frame_queue.full():
                 try:
