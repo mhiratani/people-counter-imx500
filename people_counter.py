@@ -34,9 +34,10 @@ MODEL_PATH = "/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_32
 
 # ======= クラス定義 =======
 class Parameter:
-    def __init__(self):
+    def __init__(self, model_path=MODEL_PATH):
         self.config = self._load_config('config.json')
         self.camera_name                = self._get_cameraname()
+        self.model_path                  = model_path
         self.person_class_id            = 0     # 人物クラスのID（通常COCOデータセットでは0）
         self.detection_threshold        = self.config.get('DETECTION_THRESHOLD')
         self.iou_threshold              = self.config.get('IOU_THRESHOLD', 0.3)
@@ -913,12 +914,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="IMX500 AIカメラモジュール制御")
     parser.add_argument('--preview', action='store_true', help='プレビュー画面を表示する')
     args = parser.parse_args()
+    # 各種パラメータ設定
+    parameters = Parameter(MODEL_PATH)
 
-    # IMX500の初期化
     print("IMX500 AIカメラモジュールを初期化中...")
     try:
         # モデルファイルパスを指定してIMX500オブジェクトを生成
-        imx500 = IMX500("/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk")
+        imx500 = IMX500(parameters.model_path)
         intrinsics = imx500.network_intrinsics
 
         # intrinsics（ネットワーク情報）の検証
