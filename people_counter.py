@@ -43,7 +43,7 @@ class Parameter:
         self.iou_threshold              = self.config.get('IOU_THRESHOLD', 0.3)                 # マッチング時、追跡対象と検出結果の「バウンディングボックスの重なり（IoU）」の下限値
         self.max_detections             = self.config.get('MAX_DETECTIONS', 30)                 # 1フレームで扱う検出結果の最大数。これ以上は間引きされるか無視される
         self.center_line_margin_px      = self.config.get('CENTER_LINE_MARGIN_PX', 50)          # ライン中心から±何ピクセルを「ライン近傍」とみなすかの閾値（ピクセル数）
-        self.recovery_distance_px       = self.config.get('RECOVERY_DISTANCE_PX', 200)          # 過去の人物と新しい検出の中心座標（x）の距離が 何ピクセル以内なら「同一人物が復帰した」とみなすかの閾値
+        self.recovery_distance_px       = self.config.get('RECOVERY_DISTANCE_PX',  80)          # 過去の人物と新しい検出の中心座標（x）の距離が 何ピクセル以内なら「同一人物が復帰した」とみなすかの閾値
         self.tracking_timeout           = self.config.get('TRACKING_TIMEOUT', 5.0)              # 人物を追跡し続ける最大時間（秒）
         self.counting_interval          = self.config.get('COUNTING_INTERVAL', 60)              # カウント間隔（秒）
         self.active_timeout_sec         = self.config.get('ACTIVE_TIMEOUT_SEC', 0.5)            # lost_people保持猶予(秒)
@@ -231,7 +231,14 @@ class Detection:
         """
         x, y, w, h = self.box
         return (x + w//2, y + h//2)
-    
+
+    def get_box_height(self):
+        """
+        バウンディングボックスの高さを返す
+        Returns: int
+        """
+        return self.box[3]
+
     @staticmethod
     def parse_detections(metadata, parameters, intrinsics, imx500, picam2):
         """
@@ -393,6 +400,13 @@ class Person:
         avg_dx = sum(dxs) / len(dxs)
         avg_dy = sum(dys) / len(dys)
         return (avg_dx, avg_dy)
+
+    def get_box_height(self):
+        """
+        現在のバウンディングボックスの高さを返す
+        Returns: int
+        """
+        return self.box[3]
 
 class PeopleCounter:
     """
@@ -732,13 +746,24 @@ class PeopleFlowManager:
 
                         # lost_personの移動方向と、新たな検出位置の方向が一致しているか？ 例：右へ移動していたなら、検出点も右側でなければならない
                         same_direction = (avg_dx * diff_x > 0)  
+                        # ボックス高さの近似条件
+                        lost_height = lost_person.get_box_height()
+                        det_height = detection.get_box_height()
+                        if lost_height == 0:  # ゼロ除算対策
+                            height_ratio = 0
+                        else:
+                            height_ratio = det_height / lost_height
+                        HEIGHT_SIMILARITY_THRESHOLD = 0.08  # 許容する割合）
+                        height_similar = (1.0 - HEIGHT_SIMILARITY_THRESHOLD) <= height_ratio <= (1.0 + HEIGHT_SIMILARITY_THRESHOLD)
+
                         # ── 以下の条件をすべて満たす場合に復帰可能 ──
                         if (
                             center_line_x and  # 中心線が有効か
                             abs(lost_cx - center_line_x) < self.parameters.center_line_margin_px and            # 中心線から一定範囲（ピクセル）以内か
                             abs(diff_x) < self.parameters.recovery_distance_px and                              # 失った位置と検出位置が近いか
-                            now - lost_person.lost_start_time < self.parameters.active_timeout_sec and    # 見失ってからの秒数が規定以内か
-                            same_direction      # 進行方向も一致しているか
+                            now - lost_person.lost_start_time < self.parameters.active_timeout_sec and          # 見失ってからの秒数が規定以内か
+                            same_direction and  # 進行方向も一致しているか
+                            height_similar      # ボックス高さの類似度
                         ):
                             # --- 復帰処理 ---
                             print(f"recovered:{frame_id}/{lost_person.id}")
