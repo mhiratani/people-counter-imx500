@@ -72,7 +72,6 @@ ls -la /usr/share/imx500-models/
 vim config.json
 
 {
-  "MAX_TRACKING_DISTANCE": 60,
   "DETECTION_THRESHOLD": 0.55,
   "IOU_THRESHOLD": 0.3,
   "MAX_DETECTIONS": 30,
