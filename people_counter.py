@@ -48,6 +48,7 @@ class Parameter:
         self.active_timeout_sec         = self.config.get('ACTIVE_TIMEOUT_SEC', 0.5)            # lost_people保持猶予(秒)（状況で要調整）
         self.direction_mismatch_penalty = self.config.get('DIRECTION_MISMATCH_PENALTY', 0.8)    # 逆方向へのマッチに与える追加コスト
         self.max_acceptable_cost        = self.config.get('MAX_ACCEPTABLE_COST', 1.1)           # 最大許容コスト
+        self.min_box_height             = self.config.get('MIN_BOX_HEIGHT', 0)                  # 人物ボックスの高さフィルタ。これより小さいBoxは排除(ピクセル)
         self.output_dir                 = self.config.get('OUTPUT_DIR', 'people_count_data')
         self.debug_mode                 = str(self.config.get('DEBUG_MODE', 'False')).lower() == 'true'
         self.debug_images_subdir_name   = self.config.get('DEBUG_IMAGES_SUBDIR_NAME', 'debug_images')
