@@ -39,15 +39,15 @@ class Parameter:
         self.camera_name                = self._get_cameraname()
         self.model_path                  = model_path
         self.person_class_id            = 0     # 人物クラスのID（通常COCOデータセットでは0）
-        self.detection_threshold        = self.config.get('DETECTION_THRESHOLD')                # 検出器が出力する「検出信頼度スコア」の下限値。これ未満は無視する。
+        self.detection_threshold        = self.config.get('DETECTION_THRESHOLD',0.50)                # 検出器が出力する「検出信頼度スコア」の下限値。これ未満は無視する。
         self.iou_threshold              = self.config.get('IOU_THRESHOLD', 0.3)                 # マッチング時、追跡対象と検出結果の「バウンディングボックスの重なり（IoU）」の下限値
         self.max_detections             = self.config.get('MAX_DETECTIONS', 30)                 # 1フレームで扱う検出結果の最大数。これ以上は間引きされるか無視される
         self.center_line_margin_px      = self.config.get('CENTER_LINE_MARGIN_PX', 50)          # ライン中心から±何ピクセルを「ライン近傍」とみなすかの閾値（ピクセル数）
         self.recovery_distance_px       = self.config.get('RECOVERY_DISTANCE_PX', 200)          # 過去の人物と新しい検出の中心座標（x）の距離が 何ピクセル以内なら「同一人物が復帰した」とみなすかの閾値
         self.tracking_timeout           = self.config.get('TRACKING_TIMEOUT', 5.0)              # 人物を追跡し続ける最大時間（秒）
         self.counting_interval          = self.config.get('COUNTING_INTERVAL', 60)              # カウント間隔（秒）
-        self.active_timeout_sec         = self.config.get('ACTIVE_TIMEOUT_SEC', 0.5)            # lost_people保持猶予(秒)（状況で要調整）
-        self.direction_mismatch_penalty = self.config.get('DIRECTION_MISMATCH_PENALTY', 0.8)    # 逆方向へのマッチに与える追加コスト
+        self.active_timeout_sec         = self.config.get('ACTIVE_TIMEOUT_SEC', 0.5)            # lost_people保持猶予(秒)
+        self.direction_mismatch_penalty = self.config.get('DIRECTION_MISMATCH_PENALTY', 1.0)    # 逆方向へのマッチに与える追加コスト
         self.max_acceptable_cost        = self.config.get('MAX_ACCEPTABLE_COST', 1.1)           # 最大許容コスト
         self.min_box_height             = self.config.get('MIN_BOX_HEIGHT', 0)                  # 人物ボックスの高さフィルタ。これより小さいBoxは排除(ピクセル)
         self.output_dir                 = self.config.get('OUTPUT_DIR', 'people_count_data')    # ログデータを保存するディレクトリ名
@@ -737,7 +737,7 @@ class PeopleFlowManager:
                             center_line_x and  # 中心線が有効か
                             abs(lost_cx - center_line_x) < self.parameters.center_line_margin_px and            # 中心線から一定範囲（ピクセル）以内か
                             abs(diff_x) < self.parameters.recovery_distance_px and                              # 失った位置と検出位置が近いか
-                            now - lost_person.lost_start_time < self.parameters.match_active_timeout_sec and    # 見失ってからの秒数が規定以内か
+                            now - lost_person.lost_start_time < self.parameters.active_timeout_sec and    # 見失ってからの秒数が規定以内か
                             same_direction      # 進行方向も一致しているか
                         ):
                             # --- 復帰処理 ---
