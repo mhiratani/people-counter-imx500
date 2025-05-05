@@ -729,7 +729,7 @@ class PeopleFlowManager:
                             now - lost_person.lost_start_time < self.parameters.match_active_timeout_sec and
                             same_direction
                         ):
-                            print(f"recovered:{frame_id}/{person.id}")
+                            print(f"recovered:{frame_id}/{lost_person.id}")
                             lost_person.update(detection.box)
                             new_people.append(lost_person)
                             recovered.append(lost_person)
@@ -740,13 +740,6 @@ class PeopleFlowManager:
                 # 完全ロスト判定
                 lost_people = [p for p in lost_people if now - p.lost_start_time < self.parameters.active_timeout_sec]
 
-                # new_peopleに含まれないdetectionsは新規ID化
-                for j, detection in enumerate(detections):
-                    match_found = any([detection.box == p.box for p in new_people])  # だいたいbox一致を使う、orフラグでもOK
-                    if not match_found:
-                        new_people.append(Person(detection.box))
-
-                # print("distance=", distance, "iou=", iou)
                 return new_people, lost_people
 
             except Exception as e:
