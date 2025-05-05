@@ -672,7 +672,6 @@ class PeopleFlowManager:
             # ハンガリアンアルゴリズムを実行し、最適なマッチングを見つける
             # matched_person_indices: active_peopleのインデックスの配列
             # matched_detection_indices: detectionsのインデックスの配列
-            # print("Will run linear_sum_assignment")
             try:
                 matched_person_indices, matched_detection_indices = linear_sum_assignment(cost_matrix)
 
@@ -716,27 +715,32 @@ class PeopleFlowManager:
                 recovered = []
                 for detection in detections:
                     for lost_person in lost_people:
-                        # [復帰条件] 距離/IOU/ライン近傍/経過時間
+                        # ---- 復帰判定の各種条件 ----
+                        # lost_person（見失った人）の中心座標取得
                         lost_cx, _ = lost_person.get_center()
+                        # detection（新検出）の中心座標取得
                         det_cx, _ = detection.get_center()
+                        # lost_personの移動平均（過去フレームからの平均速度・方向）取得
                         avg_dx, avg_dy = lost_person.get_avg_motion()
+                        # x方向の検出位置のズレ
                         diff_x = det_cx - lost_cx
-                        # 移動平均の符号が一致（右なら右，左なら左へ離れてる）
-                        same_direction = (avg_dx * diff_x > 0)  
-                        # ライン中心距離(CENTER_LINE_MARGIN_PX)ピクセル以内・距離(RECOVERY_DISTANCE_PX)ピクセル以内・ACTIVE_TIMEOUT秒以内など
-                        if (
-                            center_line_x and
-                            abs(lost_cx - center_line_x) < self.parameters.center_line_margin_px and
-                            abs(diff_x) < self.parameters.recovery_distance_px  and
-                            now - lost_person.lost_start_time < self.parameters.match_active_timeout_sec and
-                            same_direction
-                        ):
-                            print(f"recovered:{frame_id}/{lost_person.id}")
-                            lost_person.update(detection.box)
-                            new_people.append(lost_person)
-                            recovered.append(lost_person)
-                            break  # 1人あたり復帰1回だけ
 
+                        # lost_personの移動方向と、新たな検出位置の方向が一致しているか？ 例：右へ移動していたなら、検出点も右側でなければならない
+                        same_direction = (avg_dx * diff_x > 0)  
+                        # ── 以下の条件をすべて満たす場合に復帰可能 ──
+                        if (
+                            center_line_x and  # 中心線が有効か
+                            abs(lost_cx - center_line_x) < self.parameters.center_line_margin_px and            # 中心線から一定範囲（ピクセル）以内か
+                            abs(diff_x) < self.parameters.recovery_distance_px and                              # 失った位置と検出位置が近いか
+                            now - lost_person.lost_start_time < self.parameters.match_active_timeout_sec and    # 見失ってからの秒数が規定以内か
+                            same_direction      # 進行方向も一致しているか
+                        ):
+                            # --- 復帰処理 ---
+                            print(f"recovered:{frame_id}/{lost_person.id}")
+                            lost_person.update(detection.box)   # lost_personの情報を新しい検出で更新
+                            new_people.append(lost_person)      # 新規・復帰リストに追加
+                            recovered.append(lost_person)       # 復帰済みリストに追加
+                            break                               # 1検出ごとに1 lost_personだけ復帰扱い
                 # 復帰したlost_personをlost_peopleから除く
                 lost_people = [p for p in lost_people if p not in recovered]
                 # 完全ロスト判定
@@ -819,9 +823,10 @@ class PeopleFlowManager:
                     (255, 255, 0), 2)
 
             # CENTER_LINE_MARGINを描画
-            cv2.line(m.array, (center_line_x - self.parameters.center_line_margin_px, 0), (center_line_x - self.parameters.center_line_margin_px, frame_height), 
+            center_line_margin_px = self.parameters.center_line_margin_px
+            cv2.line(m.array, (center_line_x - center_line_margin_px, 0), (center_line_x - center_line_margin_px, frame_height), 
                     (0, 128, 255), 2)
-            cv2.line(m.array, (center_line_x + self.parameters.center_line_margin_px, 0), (center_line_x + self.parameters.center_line_margin_px, frame_height), 
+            cv2.line(m.array, (center_line_x + center_line_margin_px, 0), (center_line_x + center_line_margin_px, frame_height), 
                     (0, 128, 255), 2)
 
             # 人物の検出ボックスと軌跡を描画
@@ -840,12 +845,9 @@ class PeopleFlowManager:
                 cv2.rectangle(m.array, (x, y), (x + w, y + h), color, 2)
                 
                 # ID表示
-                cv2.putText(m.array, f"ID: {person.id}", (x, y - 10), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                cv2.putText(m.array, f"ID: {person.id}", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
                 # ボックスの高さ表示
-                cv2.putText(m.array, f"H: {int(h)}", (x, y + h + 15), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                
+                cv2.putText(m.array, f"H: {int(h)}", (x, y + h + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
                 # 軌跡を描画
                 if len(person.trajectory) > 1:
                     for i in range(1, len(person.trajectory)):
@@ -860,7 +862,6 @@ class PeopleFlowManager:
             cv2.putText(m.array, text_str, (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
             frame = m.array.copy()  # デバッグ画像保存用
-
             # ========== RTSP非同期配信 ==========
             if self.rtsp.rtsp_server_ip != 'None' and self.rtsp.ffmpeg_proc and self.rtsp.ffmpeg_proc.stdin:
                 frame_for_rtsp = m.array
@@ -875,16 +876,8 @@ class PeopleFlowManager:
             # 少なくとも2フレーム以上の軌跡がある人物が対象
             if len(person.trajectory) >= 2:
                 direction = self._check_line_crossing(person, center_line_x, frame)
-                # print(f"[DEBUG] 人物ID {person.id} のライン判定")
-                # print(f"[DEBUG] 軌跡: {person.trajectory[-2:]} (最後の2点を表示)")
-                # distances = [abs(xy[0] - center_line_x) for xy in person.trajectory[-2:]]
-                # print(f"[DEBUG] 直近2点のcenter_line_xまでの距離: {distances}")
                 if direction:
                     self.counter.update(direction)
-                    # print(f"[DEBUG] Person ID {person.id} crossed line: {direction}")
-                else:
-                    # print(f"[DEBUG] {person.id} はまだ横断していません")
-                    pass
 
         # --- アクティブ人物リスト整理 ---
         # 古いトラッキング対象を削除 (last_seen が TRACKING_TIMEOUT を超えたもの)
@@ -946,12 +939,9 @@ if __name__ == "__main__":
         # 足りない項目はデフォルト値で補う
         intrinsics.update_with_defaults()
 
-        # Picamera2の初期化
-        print("カメラを初期化中...")
+        print("Picamera2カメラを初期化中...")
         picam2 = Picamera2(imx500.camera_num)
-
-        # カメラ用設定
-        main = {'format': 'XRGB8888'} 
+        main = {'format': 'XRGB8888'}   # カメラ用設定
 
         # プレビュー構成を作成、ネットワーク進行状況バーを表示
         config = picam2.create_preview_configuration(main, controls={"FrameRate": intrinsics.inference_rate}, buffer_count=8)
@@ -978,7 +968,6 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # 各種パラメータクラス初期化
-    parameters = Parameter()
     camera = Camera(picam2, imx500)
     rtsp = RTSP(parameters.rtsp_server_ip, parameters.rtsp_server_port, intrinsics)
     directoryInfo = DirectoryInfo(parameters.output_dir, parameters.camera_name, parameters.debug_images_subdir_name)
