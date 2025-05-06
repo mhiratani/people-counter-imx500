@@ -42,13 +42,13 @@ class Parameter:
         self.detection_threshold        = self.config.get('DETECTION_THRESHOLD',0.50)                # 検出器が出力する「検出信頼度スコア」の下限値。これ未満は無視する。
         self.iou_threshold              = self.config.get('IOU_THRESHOLD', 0.3)                 # マッチング時、追跡対象と検出結果の「バウンディングボックスの重なり（IoU）」の下限値
         self.max_detections             = self.config.get('MAX_DETECTIONS', 30)                 # 1フレームで扱う検出結果の最大数。これ以上は間引きされるか無視される
-        self.center_line_margin_px      = self.config.get('CENTER_LINE_MARGIN_PX', 50)          # ライン中心から±何ピクセルを「ライン近傍」とみなすかの閾値（ピクセル数）
-        self.recovery_distance_px       = self.config.get('RECOVERY_DISTANCE_PX',  80)          # 過去の人物と新しい検出の中心座標（x）の距離が 何ピクセル以内なら「同一人物が復帰した」とみなすかの閾値
+        self.center_line_margin_px      = self.config.get('CENTER_LINE_MARGIN_PX', 100)          # ライン中心から±何ピクセルを「ライン近傍」とみなすかの閾値（ピクセル数）
+        self.recovery_distance_px       = self.config.get('RECOVERY_DISTANCE_PX',  150)          # 過去の人物と新しい検出の中心座標（x）の距離が 何ピクセル以内なら「同一人物が復帰した」とみなすかの閾値
         self.tracking_timeout           = self.config.get('TRACKING_TIMEOUT', 5.0)              # 人物を追跡し続ける最大時間（秒）
         self.counting_interval          = self.config.get('COUNTING_INTERVAL', 60)              # カウント間隔（秒）
-        self.active_timeout_sec         = self.config.get('ACTIVE_TIMEOUT_SEC', 0.5)            # lost_people保持猶予(秒)
+        self.active_timeout_sec         = self.config.get('ACTIVE_TIMEOUT_SEC', 1.5)            # lost_people保持猶予(秒)
         self.direction_mismatch_penalty = self.config.get('DIRECTION_MISMATCH_PENALTY', 1.0)    # 逆方向へのマッチに与える追加コスト
-        self.max_acceptable_cost        = self.config.get('MAX_ACCEPTABLE_COST', 1.1)           # 最大許容コスト
+        self.max_acceptable_cost        = self.config.get('MAX_ACCEPTABLE_COST', 1.0)           # 最大許容コスト
         self.min_box_height             = self.config.get('MIN_BOX_HEIGHT', 0)                  # 人物ボックスの高さフィルタ。これより小さいBoxは排除(ピクセル)
         self.output_dir                 = self.config.get('OUTPUT_DIR', 'people_count_data')    # ログデータを保存するディレクトリ名
         self.debug_mode                 = str(self.config.get('DEBUG_MODE', 'False')).lower() == 'true'
@@ -353,7 +353,7 @@ class Person:
         self.trajectory = [self.get_center()]   # tracking用: 中心座標履歴（初期値は現フレーム）
         self.first_seen = time.time()           # 初回検出時刻
         self.last_seen = time.time()            # 最終検出時刻（trackingロスト検出等に使用）
-        self.crossed_direction = None           # 何かの線をまたいだ向き（用途次第・初期値None）
+        self.crossed_direction = None           # 線をまたいだ向き（用途次第・初期値None）
         self.lost_start_time = None             # トラッキングロストが始まった時刻
         self.lost_last_box = None               # ロスト時の最後のバウンディングボックス
 
@@ -765,11 +765,25 @@ class PeopleFlowManager:
                         HEIGHT_SIMILARITY_THRESHOLD = 0.08  # 許容する割合）
                         height_similar = (1.0 - HEIGHT_SIMILARITY_THRESHOLD) <= height_ratio <= (1.0 + HEIGHT_SIMILARITY_THRESHOLD)
 
+                        # --- 中心線からの位置条件を移動方向に応じて判定 ---
+                        is_on_correct_side_of_line_within_margin = False
+                        margin = self.parameters.center_line_margin_px
+
+                        if center_line_x is not None: # 中心線が有効な場合のみ判定
+                            if avg_dx > 0: # 右方向に移動している場合 (手前側は左側)
+                                # lost_cxが [center_line_x - margin, center_line_x] の範囲内にあるか
+                                if center_line_x - margin <= lost_cx <= center_line_x:
+                                    is_on_correct_side_of_line_within_margin = True
+                            elif avg_dx < 0: # 左方向に移動している場合 (手前側は右側)
+                                # lost_cxが [center_line_x, center_line_x + margin] の範囲内にあるか
+                                if center_line_x <= lost_cx <= center_line_x + margin:
+                                    is_on_correct_side_of_line_within_margin = True
+
                         # ── 以下の条件をすべて満たす場合に復帰可能 ──
                         now_check = time.time() # ここで最新時刻を取得
                         if (
                             center_line_x and   # 中心線が有効か
-                            abs(lost_cx - center_line_x) < self.parameters.center_line_margin_px and            # 中心線から一定範囲（ピクセル）以内か
+                            is_on_correct_side_of_line_within_margin and                                        # 中心線から一定範囲（ピクセル）以内か
                             abs(diff_x) < self.parameters.recovery_distance_px and                              # 失った位置と検出位置が近いか
                             now_check - lost_person.lost_start_time < self.parameters.active_timeout_sec and    # 見失ってからの秒数が規定以内か
                             same_direction and  # 進行方向も一致しているか
@@ -777,7 +791,7 @@ class PeopleFlowManager:
                         ):
                             # --- 復帰処理 ---
                             print(f"recovered:{frame_id}/{lost_person.id}")
-                            lost_person.update(detection.box, True) # lost_personの情報を新しい検出で更新
+                            lost_person.update(detection.box)       # lost_personの情報を新しい検出で更新
                             new_people.append(lost_person)          # 新規・復帰リストに追加 (既存のPersonオブジェクト)
                             recovered.append(lost_person)           # 復帰済みリストに追加
                             used_detections.add(j)                  # *** この検出結果は復帰に使用されたので、新規人物作成には使わない！ ***
