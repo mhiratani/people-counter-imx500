@@ -699,44 +699,49 @@ class PeopleFlowManager:
 
                 # マッチング結果を処理
                 new_people = []
-                # マッチした検出結果のインデックスを記録
-                used_detections = set(matched_detection_indices)
-                used_person = set(matched_person_indices)
+                # マッチした検出結果のインデックスを記録 (初期マッチングで使用されたもの)
+                used_detections = set()
+                used_person = set()
+
                 # コストが高すぎる場合は不一致とみなす
                 # マッチした人物を更新して新しいリストに追加
                 for i, j in zip(matched_person_indices, matched_detection_indices):
                     # コストがinfの場合は有効なマッチではないのでスキップ (linear_sum_assignmentはinfも考慮する)
-                    if cost_matrix[i,j] < self.parameters.max_acceptable_cost:
+                    if cost_matrix[i, j] < self.parameters.max_acceptable_cost:
                         person = active_people[i]
                         detection = detections[j]
                         person.update(detection.box)
                         new_people.append(person)
+                        used_person.add(i)       # この人物はマッチに使用された
+                        used_detections.add(j)   # *** この検出結果は初期マッチに使用された ***
                     else:
+                        # コストが高すぎる場合はマッチとして使用しない
                         pass # 不一致
 
-                # マッチしなかった新しい検出結果を新しい人物としてリストに追加
-                for j, detection in enumerate(detections):
-                    if j not in used_detections:
-                        new_people.append(Person(detection.box))  # 新しい人物を作成
-                # 失踪した人物も追加
-                for i, person in enumerate(active_people):
-                    if i not in used_person:
-                        new_people.append(person)
-
-                # ここで new_people(=今期マッチ分)に含まれなかったactive_peopleは「一時ロスト」の候補
+                # マッチしなかったactive_peopleを一時ロストの候補とし、lost_peopleリストへ追加
                 now = time.time()
-
-                # マッチしなかったactive_people→lost_peopleへ
                 for i, person in enumerate(active_people):
                     if i not in used_person:
-                        person.lost_start_time = now
-                        person.lost_last_box = person.box
-                        lost_people.append(person)
+                        person.lost_start_time = now        # ロスト開始時刻を記録
+                        person.lost_last_box = person.box   # ロスト時のボックスを記録
+                        lost_people.append(person)          # lost_peopleリストに追加
 
                 # lost_peopleからも「復帰」判定！
                 recovered = []
-                for detection in detections:
+                # ここでは全ての検出結果を見るが、すでにused_detectionsにあるものは復帰には使われないように制御する
+                for j, detection in enumerate(detections): # enumerateでインデックスjも取得
+                    if j in used_detections:
+                        continue # この検出結果は既に初期マッチングで使用されたので、復帰には使わない
+
+                    # 各ロスト人物に対して復帰可能かチェック
                     for lost_person in lost_people:
+                        # 一度復帰したlost_personは再度このフレームで復帰させない → recoveredリストで管理
+                        if lost_person in recovered:
+                            continue
+
+                        if lost_person.crossed_direction is not None:
+                            continue # このlost_personは既にカウント済みなのでスキップ
+
                         # ---- 復帰判定の各種条件 ----
                         # lost_person（見失った人）の中心座標取得
                         lost_cx, _ = lost_person.get_center()
@@ -747,8 +752,9 @@ class PeopleFlowManager:
                         # x方向の検出位置のズレ
                         diff_x = det_cx - lost_cx
 
-                        # lost_personの移動方向と、新たな検出位置の方向が一致しているか？ 例：右へ移動していたなら、検出点も右側でなければならない
-                        same_direction = (avg_dx * diff_x > 0)  
+                        # lost_personの移動方向と、新たな検出位置の方向が一致しているか？
+                        same_direction = (avg_dx * diff_x > 0)
+
                         # ボックス高さの近似条件
                         lost_height = lost_person.get_box_height()
                         det_height = detection.get_box_height()
@@ -760,25 +766,42 @@ class PeopleFlowManager:
                         height_similar = (1.0 - HEIGHT_SIMILARITY_THRESHOLD) <= height_ratio <= (1.0 + HEIGHT_SIMILARITY_THRESHOLD)
 
                         # ── 以下の条件をすべて満たす場合に復帰可能 ──
+                        now_check = time.time() # ここで最新時刻を取得
                         if (
-                            center_line_x and  # 中心線が有効か
+                            center_line_x and   # 中心線が有効か
                             abs(lost_cx - center_line_x) < self.parameters.center_line_margin_px and            # 中心線から一定範囲（ピクセル）以内か
                             abs(diff_x) < self.parameters.recovery_distance_px and                              # 失った位置と検出位置が近いか
-                            now - lost_person.lost_start_time < self.parameters.active_timeout_sec and          # 見失ってからの秒数が規定以内か
+                            now_check - lost_person.lost_start_time < self.parameters.active_timeout_sec and    # 見失ってからの秒数が規定以内か
                             same_direction and  # 進行方向も一致しているか
                             height_similar      # ボックス高さの類似度
                         ):
                             # --- 復帰処理 ---
                             print(f"recovered:{frame_id}/{lost_person.id}")
-                            lost_person.update(detection.box)   # lost_personの情報を新しい検出で更新
-                            new_people.append(lost_person)      # 新規・復帰リストに追加
-                            recovered.append(lost_person)       # 復帰済みリストに追加
-                            break                               # 1検出ごとに1 lost_personだけ復帰扱い
-                # 復帰したlost_personをlost_peopleから除く
-                lost_people = [p for p in lost_people if p not in recovered]
-                # 完全ロスト判定
-                lost_people = [p for p in lost_people if now - p.lost_start_time < self.parameters.active_timeout_sec]
+                            lost_person.update(detection.box, True) # lost_personの情報を新しい検出で更新
+                            new_people.append(lost_person)          # 新規・復帰リストに追加 (既存のPersonオブジェクト)
+                            recovered.append(lost_person)           # 復帰済みリストに追加
+                            used_detections.add(j)                  # *** この検出結果は復帰に使用されたので、新規人物作成には使わない！ ***
+                            break                                   # この検出結果で1つのロスト人物が復帰したら、他のロスト人物との比較は終了
 
+                # 復帰したlost_peopleをlost_peopleリストから除く
+                lost_people = [p for p in lost_people if p not in recovered]
+
+                # 完全ロスト判定
+                # ロスト開始時刻から規定時間以上経過した人物をlost_peopleから除く
+                now_final = time.time() # 最終的な時刻チェック
+                lost_people = [p for p in lost_people if now_final - p.lost_start_time < self.parameters.active_timeout_sec]
+
+
+                # マッチしなかった (used_detectionsに含まれていない) 新しい検出結果を新しい人物としてリストに追加
+                # ここでは、初期マッチングにも復帰にも使われなかった検出結果のみが対象となる
+                for j, detection in enumerate(detections):
+                    if j not in used_detections:                    #  used_detectionsには初期マッチと復帰に使用された検出結果が含まれている
+                        new_people.append(Person(detection.box))    # 新しい人物を作成 (新しいPersonオブジェクト)
+
+                # new_people の中身は
+                # 1. 初期マッチングで更新された active_people (既存オブジェクト)
+                # 2. ロストから復帰した lost_people (既存オブジェクト)
+                # 3. どの既存人物とも対応付けられなかった新規検出 (新しいオブジェクト)
                 return new_people, lost_people
 
             except Exception as e:
