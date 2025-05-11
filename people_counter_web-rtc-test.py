@@ -19,10 +19,14 @@ from picamera2.devices.imx500.postprocess import scale_boxes
 
 import modules
 
-# ffmpegによるRTSP配信プロセス用
-import queue
+# webRTC配信プロセス用
 import threading
-import subprocess
+import asyncio
+from aiortc import VideoStreamTrack, RTCPeerConnection, RTCSessionDescription
+from aiohttp import web
+from av import VideoFrame
+# グローバルでQueue用意 
+frame_queue = asyncio.Queue(maxsize=120)
 
 # 描画設定
 import cv2
@@ -54,8 +58,6 @@ class Parameter:
         self.output_dir                 = self.config.get('OUTPUT_DIR', 'people_count_data')    # ログデータを保存するディレクトリ名
         self.debug_mode                 = str(self.config.get('DEBUG_MODE', 'False')).lower() == 'true'
         self.debug_images_subdir_name   = self.config.get('DEBUG_IMAGES_SUBDIR_NAME', 'debug_images')
-        self.rtsp_server_ip             = self.config.get('RTSP_SERVER_IP', 'None')             # RTSP配信先IPアドレス
-        self.rtsp_server_port           = 8554
         self.log_interval               = 10
 
     def _load_config(self, path):
@@ -74,123 +76,48 @@ class Parameter:
 
         return camera_name
 
-class RTSP:
+class CameraTrack(VideoStreamTrack):
     """
-    フレームデータをffmpeg経由でRTSPサーバへ配信するためのクラス。
-    フレームは内部キューに蓄積し、別スレッドでffmpegに逐次書き込む。
+    WebRTC用のカスタムVideoStreamTrack。
+    asyncio.QueueからBGR画像(numpy配列)を取り出して、WebRTCのvideoフレームとして送信する。
     """
-    def __init__(self, rtsp_server_ip, rtsp_server_port, intrinsics, frame_queue_size=3):
-        """
-        コンストラクタ
+    kind = "video"  # このトラックが"video"ストリームであることを明示
 
-        Args:
-            rtsp_server_ip (str): RTSPサーバIPアドレス
-            rtsp_server_port (int): RTSPサーバポート
-            intrinsics : 画像・動画フレームの内部パラメータ（推論レートなどを保持）
-            frame_queue_size (int): 内部フレームキューの最大長（デフォルト: 3）
-        """
-        self.rtsp_server_ip = rtsp_server_ip
-        self.rtsp_server_port = rtsp_server_port
-        # ffmpegに送信するフレームの一時保持用キュー。overflow時は古いものから削除。
-        self.frame_queue = queue.Queue(maxsize=frame_queue_size)
-        # ffmpegプロセスの起動と設定
-        self.ffmpeg_proc = self.rtsp_setting(intrinsics)
-        # ffmpegプロセスへデータを書き込むスレッドの起動
-        self.rtsp_thread = self.start_rtsp_thread(self.ffmpeg_proc)
-        self.active = True  # 配信中フラグ
-        self.message = False  # 配信停止メッセージ出力フラグ
+    def __init__(self, queue):
+        super().__init__()
+        self.queue = queue  # Producer側から動画フレーム供給されるasyncio.Queue
 
-    def rtsp_writer_thread(self, ffmpeg_proc):
+    async def recv(self):
         """
-        フレームキューからフレームを取り出してffmpeg stdinへ書き込む無限ループスレッド。
-        Args: ffmpeg_proc (subprocess.Popen): 起動済みffmpegプロセス
+        WebRTCスタックからフレーム送信を要求された際に呼び出される非同期メソッド。
+        キューから次のフレームを取得し、VideoFrameとして返す。
+        問題があれば黒画像で代用。
         """
-        while True:
-            frame = self.frame_queue.get()
-            try:
-                # フレームデータをバイト列へ変換してffmpegへ入力
-                ffmpeg_proc.stdin.write(frame.astype(np.uint8).tobytes())
-            except Exception as e:
-                print(f"[RTSP配信エラー]: {e}")
-                self.active = False  # 配信停止
-            finally:
-                self.frame_queue.task_done()
+        #print("CameraTrack.recv called!")  # デバッグ用：ちゃんと呼ばれているか確認
 
-    def start_rtsp_thread(self, ffmpeg_proc):
-        """
-        ffmpegへのフレーム書き込み専用スレッドを起動
-        Args: ffmpeg_proc (subprocess.Popen): 起動済みffmpegプロセス
-        Returns: threading.Thread: 起動したデーモンスレッド
-        """
-        t = threading.Thread(target=self.rtsp_writer_thread, args=(ffmpeg_proc,), daemon=True)
-        t.start()
-        return t
-
-    def send_frame_for_rtsp(self, frame):
-        """
-        キューにフレームを追加（キューが満杯なら古いフレームを捨てて新しいフレームを必ず入れる）
-
-        Args:
-            frame (np.ndarray): 配信したいフレーム
-        """
-        if not self.active:
-            if not self.message:
-                print("RTSP配信は既に停止しています")
-                self.message  = True
-            return
         try:
-            if self.frame_queue.full():
-                try:
-                    self.frame_queue.get_nowait()  # 古いデータを非同期で破棄
-                except queue.Empty:
-                    pass
-            self.frame_queue.put_nowait(frame)
-        except queue.Full:
-            pass  # 想定外の複数同時処理はスキップ
+            # 1秒以内にキューからフレームを受け取る。タイムアウトなら例外送出。
+            frame = await asyncio.wait_for(self.queue.get(), timeout=1.0)
+            # print("CameraTrack got frame from queue!", frame.shape, frame.dtype, frame.max(), frame.min())  # デバッグ用
 
-    def rtsp_setting(self, intrinsics):
-        """
-        RTSP配信用のffmpegプロセスを起動・設定
-        Args: intrinsics: 推論時の内部パラメータ（フレームレート取得に利用）
-        Returns: subprocess.Popen | str: ffmpegプロセス（または異常時は空文字列）
-        """
-        # 初期値。失敗時などはこのまま返す。
-        ffmpeg_proc = ''  
-        if self.rtsp_server_ip != 'None':
-            # 解像度やフレームレート等の設定
-            FRAME_WIDTH  = 640
-            FRAME_HEIGHT = 480
-            FRAME_RATE = int(intrinsics.inference_rate) if hasattr(intrinsics, 'inference_rate') else 15
-            RTSP_URL = f"rtsp://{self.rtsp_server_ip}:{self.rtsp_server_port}/stream"
+            # OpenCV画像が偶数高さ・幅でなければ切り詰める（YUV420p変換時に必要）
+            if frame.shape[0] % 2 == 1 or frame.shape[1] % 2 == 1:
+                frame = frame[:frame.shape[0]//2*2, :frame.shape[1]//2*2, :]
 
-            # ffmpegプロセス起動用コマンド
-            ffmpeg_cmd = [
-                "ffmpeg",
-                "-nostats",
-                "-loglevel", "error", 
-                "-re",
-                "-f", "rawvideo",
-                "-pix_fmt", "bgr24",
-                "-s", f"{FRAME_WIDTH}x{FRAME_HEIGHT}",
-                "-r", str(FRAME_RATE),
-                "-i", "-",              # 入力：標準入力
-                "-an",                  # 音声なし
-                "-c:v", "libx264",
-                "-preset", "ultrafast", # 低遅延
-                "-tune", "zerolatency",
-                "-f", "rtsp",
-                RTSP_URL
-            ]
-            try:
-                ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
-                print("ffmpegによるRTSP配信プロセス起動")
-            except Exception as e:
-                print(f"ffmpeg起動失敗: {e}")
-                sys.exit(1)
-        else:
-            print(f"RTSP_SERVER_IPが未指定のためRTSP配信は行いません")
+            # BGR画像をaiortc用VideoFrameへ変換（内部でYUV420に自動変換される）
+            video_frame = VideoFrame.from_ndarray(frame, format="bgr24")
 
-        return ffmpeg_proc
+            # RTP/RTCP用のpts, time_baseをセット（順序保証＆シンク用; VideoStreamTrackに用意されている）
+            video_frame.pts, video_frame.time_base = await self.next_timestamp()
+            return video_frame  # 正常時：フレーム送信
+
+        except Exception as e:
+            print("[ERROR] Exception in CameraTrack.recv:", repr(e))
+            # 例外発生時やキューが空の時は全黒画像で代用し、ストリーム切れを防ぐ
+            frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            video_frame = VideoFrame.from_ndarray(frame, format="bgr24")
+            video_frame.pts, video_frame.time_base = await self.next_timestamp()
+            return video_frame
 
 class DirectoryInfo:
     def __init__(self, output_dir, output_prefix, debug_images_subdir_name):
@@ -510,13 +437,12 @@ class PeopleFlowManager:
     1フレームごとに検出〜追跡〜カウント〜描画〜ログ〜定期保存までを一元管理する。
     """
 
-    def __init__(self, config, rtsp, counter, directoryInfo, intrinsics, camera, parameters):
+    def __init__(self, config, loop, counter, directoryInfo, intrinsics, camera, parameters):
         """
         クラス各種ハンドル・設定値を初期化。
 
         Args:
             config: アプリ全体設定
-            rtsp: RTSP配信用オブジェクト
             counter: 人数カウンタ（PeopleCounterインスタンス）
             directoryInfo: 保存ディレクトリ・出力プリフィックス等の設定
             intrinsics: カメラ・モデルの内部パラメータ
@@ -525,11 +451,11 @@ class PeopleFlowManager:
         """
         self.active_people = []     # 現在追跡中の人物リスト
         self.lost_people = []       # 一時追跡ロスト中の人物リスト
-        self.rtsp = rtsp
         self.counter = counter
         self.directoryInfo = directoryInfo
         self.last_log_time = time.time()
         self.config = config
+        self.loop = loop
         self.intrinsics = intrinsics
         self.camera = camera
         self.parameters = parameters
@@ -932,14 +858,19 @@ class PeopleFlowManager:
             text_str = f"FrameID: {frame_id} / {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             cv2.putText(m.array, text_str, (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
-            frame = m.array.copy()  # デバッグ画像保存用
-            # ========== RTSP非同期配信 ==========
-            if self.rtsp.rtsp_server_ip != 'None' and self.rtsp.ffmpeg_proc and self.rtsp.ffmpeg_proc.stdin:
-                frame_for_rtsp = m.array
-                # BGRA→BGR変換
-                if frame_for_rtsp.shape[2] == 4:
-                    frame_for_rtsp = cv2.cvtColor(frame_for_rtsp, cv2.COLOR_BGRA2BGR)
-                self.rtsp.send_frame_for_rtsp(frame_for_rtsp)
+            # ============ webRTC配信 ============
+            frame = m.array.copy()
+            # BGRA→BGR(もしくはRGB→BGR, フォーマット次第で調整)
+            if frame.shape[2] == 4:
+                frame_to_send = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+            else:
+                frame_to_send = frame.copy()
+            # キューに入れる
+            if not frame_queue.full():
+                try:
+                    frame_queue.put_nowait(frame_to_send)
+                except Exception as e:
+                    print("Frame put failed:", e)
             # ===================================
 
         # ラインを横切った人をカウント
@@ -973,11 +904,7 @@ class PeopleFlowManager:
             self.counter.save_to_json()
 
 # ======= メイン処理 =======
-if __name__ == "__main__":
-    # コマンドライン引数のパーサを作成
-    parser = argparse.ArgumentParser(description="IMX500 AIカメラモジュール制御")
-    parser.add_argument('--preview', action='store_true', help='プレビュー画面を表示する')
-    args = parser.parse_args()
+def camera_main(stop_event, args, loop):
     # 各種パラメータ設定
     parameters = Parameter(MODEL_PATH)
 
@@ -1040,13 +967,12 @@ if __name__ == "__main__":
 
     # 各種パラメータクラス初期化
     camera = Camera(picam2, imx500)
-    rtsp = RTSP(parameters.rtsp_server_ip, parameters.rtsp_server_port, intrinsics)
     directoryInfo = DirectoryInfo(parameters.output_dir, parameters.camera_name, parameters.debug_images_subdir_name)
     directoryInfo.makedir(parameters.debug_mode)
     counter = PeopleCounter(directoryInfo)
 
     # フレーム毎に呼ばれるコールバックをPeopleFlowManagerで設定
-    manager = PeopleFlowManager(config, rtsp, counter, directoryInfo, intrinsics, camera, parameters)
+    manager = PeopleFlowManager(config, loop, counter, directoryInfo, intrinsics, camera, parameters)
     picam2.pre_callback = manager.process_frame
 
     print(f"人流カウント開始 - {parameters.counting_interval}秒ごとにデータを保存します")
@@ -1054,22 +980,105 @@ if __name__ == "__main__":
     print("Ctrl+Cで終了します")
     
     try:
-        # メインループ - コールバックにて処理されるためループ内は待機のみ
-        while True:
-            time.sleep(0.01)  # CPU使用率抑制
-
-    except KeyboardInterrupt:
-        print("終了中...")
-        # 最後のデータを保存
-        counter.save_to_json()
-
+        while not stop_event.is_set():
+            time.sleep(0.01)
+    except Exception as e:
+        print("カメラメイン例外:", e)
     finally:
-        # カメラ停止とリソース解放
         try:
-            if 'picam2' in locals() and picam2: # picam2が初期化されているか確認
+            counter.save_to_json()
+            if 'picam2' in locals() and picam2:
                 picam2.stop()
                 picam2.close()
                 print("カメラを停止しました")
             print("プログラムを終了します")
         except Exception as e:
             print(f"終了処理エラー: {e}")
+
+pcs = set()
+async def offer(request):
+    print("OFFER HANDLER CALLED!")
+    headers = {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': '*',
+    }
+    try:
+        params = await request.json()
+        offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
+        pc = RTCPeerConnection()
+        pcs.add(pc)
+        camera_track = CameraTrack(frame_queue)
+        pc.addTrack(camera_track)
+        await pc.setRemoteDescription(offer)
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+        return web.Response(
+            content_type="application/json",
+            headers=headers,
+            text=json.dumps(
+                {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+            ),
+        )
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        # 失敗時もCORSつきエラーを返す
+        return web.Response(
+            status=500,
+            content_type='text/plain',
+            headers=headers,
+            text="Offer handler error: " + str(e)
+        )
+
+async def options_handler(request):
+    # CORSプリフライトに応答
+    headers = {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': '*',
+        'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+    }
+    return web.Response(headers=headers)
+
+async def web_server(stop_event):
+    app = web.Application()
+    app.router.add_post('/offer', offer)
+    app.router.add_options('/offer', options_handler)  # 追加
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    await site.start()
+    print("WebRTC signaling server started")
+    try:
+        while not stop_event.is_set():
+            await asyncio.sleep(1)
+        print("[web server] 停止イベントを受信。サーバー停止開始。")
+        await runner.cleanup()
+    except Exception as e:
+        print(f"Webサーバ例外: {e}")
+
+async def main():
+    stop_event = threading.Event()
+    # コマンドライン引数のパーサを作成
+    parser = argparse.ArgumentParser(description="IMX500 AIカメラモジュール制御")
+    parser.add_argument('--preview', action='store_true', help='プレビュー画面を表示する')
+    args = parser.parse_args()
+
+    loop = asyncio.get_running_loop()  # ここでloopを取得
+    # カメラスレッド起動時にloopを渡す
+    cam_thread = threading.Thread(target=camera_main, args=(stop_event, args, loop), daemon=True)
+    cam_thread.start()
+    try:
+        await web_server(stop_event)
+    except KeyboardInterrupt:
+        print("[async main] Ctrl+Cキャッチ、停止イベントセット")
+        stop_event.set()
+        cam_thread.join()
+        print("[async main] Cameraスレッド終了を確認")
+    finally:
+        print("[async main] メインスレッドの終了処理")
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
