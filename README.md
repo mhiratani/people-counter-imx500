@@ -140,11 +140,7 @@ vim config.json
 # OUTPUT_DIR データ保存ディレクトリ
 # OUTPUT_PREFIX　出力ファイル名のプレフィックス(カメラ名はcamera_name.jsonから取得)
 # DEBUG_MODE デバッグモードのオン/オフ
-```
-
-
-- RTSPでストリーム配信したいときは、RTSPサーバのURLを記載する。
-- 例 : `rtsp://192.168.10.11`
+# RTSP_SERVER_IP RTSPサーバが動いているIPアドレス。RTSPでストリーム配信したいときに記載。不要の場合'None'を記載する(例 : 'rtsp://127.0.0.1')
 
 #### AWSに設定ファイルをバックアップしたい場合
 ```python
