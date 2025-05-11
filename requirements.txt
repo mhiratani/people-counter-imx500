@@ -6,8 +6,10 @@ scipy
 opencv-python
 # GUIで出したい場合はシステム版opencv( sudo apt install python3-opencv )を使用
 websockets
-# 特徴量抽出に使用
-tensorflow
+# WebRTC配信プロセス用
+aiortc
+aiohttp
+av
 
 # boto3の依存
 botocore
