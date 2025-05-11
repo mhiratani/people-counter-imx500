@@ -30,7 +30,8 @@ import cv2
 # モデル設定
 # https://www.raspberrypi.com/documentation/accessories/ai-camera.html の
 # "Run the following script from the repository to run YOLOv8 object detection:"を参照して選んだモデル
-MODEL_PATH = "/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk"
+#MODEL_PATH = "/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk"
+MODEL_PATH = "/usr/share/imx500-models/imx500_network_nanodet_plus_416x416_pp.rpk"
 
 # ======= クラス定義 =======
 class Parameter:
