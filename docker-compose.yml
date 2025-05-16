@@ -1,6 +1,5 @@
 services:
   rtsp-server:
     image: bluenviron/mediamtx
-    ports:
-      - "8554:8554"
+    network_mode: host
     restart: always
