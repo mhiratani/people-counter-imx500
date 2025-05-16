@@ -51,6 +51,7 @@ class Parameter:
         self.direction_mismatch_penalty = self.config.get('DIRECTION_MISMATCH_PENALTY')         # 逆方向へのマッチに与える追加コスト
         self.max_acceptable_cost        = self.config.get('MAX_ACCEPTABLE_COST')                # 最大許容コスト
         self.min_box_height             = self.config.get('MIN_BOX_HEIGHT')                     # 人物ボックスの高さフィルタ。これより小さいBoxは排除(ピクセル)
+        self.max_box_height             = self.config.get('MAX_BOX_HEIGHT')                     # 人物ボックスの高さフィルタ。これより大きいBoxは排除(ピクセル)
         self.output_dir                 = self.config.get('OUTPUT_DIR', 'people_count_data')    # ログデータを保存するディレクトリ名
         self.debug_mode                 = str(self.config.get('DEBUG_MODE', 'False')).lower() == 'true'
         self.debug_images_subdir_name   = self.config.get('DEBUG_IMAGES_SUBDIR_NAME', 'debug_images')
@@ -323,9 +324,11 @@ class Detection:
                 )
                 for box, score, category in selected
             ]
-            # フィルタ: 最小ボックス高さ未満の検出を除去
-            detections = [det for det in detections if det.box[3] >= parameters.min_box_height]
-
+            # フィルタ: 最小ボックス高さ未満・最大ボックス高さ超過の検出を除去
+            detections = [
+                det for det in detections
+                if parameters.min_box_height <= det.box[3] <= parameters.max_box_height
+            ]
             return detections
         
         except Exception as e:
