@@ -4,6 +4,8 @@ python-dotenv
 numpy==1.26.4
 scipy
 opencv-python
+# カルマンフィルタ用
+filterpy
 # GUIで出したい場合はシステム版opencv( sudo apt install python3-opencv )を使用
 websockets
 # WebRTC配信プロセス用
