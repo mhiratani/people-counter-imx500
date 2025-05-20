@@ -31,6 +31,8 @@ frame_queue = asyncio.Queue(maxsize=120)
 # 描画設定
 import cv2
 
+from filterpy.kalman import KalmanFilter
+
 # モデル設定
 # https://www.raspberrypi.com/documentation/accessories/ai-camera.html の
 # "Run the following script from the repository to run YOLOv8 object detection:"を参照して選んだモデル
@@ -264,13 +266,14 @@ class Detection:
 class Person:
     """
     複数フレームにまたがって人物情報を管理するクラス。
-    各Personインスタンスは固有ID、バウンディングボックス、出現・消滅時刻、軌跡情報等を保持する。
+    各Personインスタンスは固有ID、バウンディングボックス、出現・消滅時刻、軌跡情報等、カルマンフィルタ予測位置、移動履歴などを保持。
     """
     next_id = 0  # クラス変数。新規インスタンスごとに自動的にIDを割り当てるカウンタ
 
     def __init__(self, box):
         """
         Personインスタンスを初期化し、ユニークIDを付与。
+        カルマンフィルタも初期化。
 
         Args: box (list or tuple): [x, y, w, h]形式のバウンディングボックス
         """
@@ -285,6 +288,24 @@ class Person:
         self.lost_start_time = None             # トラッキングロストが始まった時刻
         self.lost_last_box = None               # ロスト時の最後のバウンディングボックス
 
+        # Kalmanフィルタ初期化
+        cx, cy = self.get_center()
+        self.kf = KalmanFilter(dim_x=4, dim_z=2)
+        self.kf.x = np.array([cx, cy, 0, 0])  # [x, y, dx, dy]
+        self.kf.F = np.array([
+            [1,0,1,0],
+            [0,1,0,1],
+            [0,0,1,0],
+            [0,0,0,1]
+        ])  # 基本的な定常加算モデル（位置+速度）
+        self.kf.H = np.array([
+            [1,0,0,0],
+            [0,1,0,0]
+        ])
+        self.kf.P *= 10.  # 初期共分散
+        self.kf.R = np.eye(2) * 15.  # 観測ノイズ大きめ（ピクセル単位, 要調整）
+        self.kf.Q = np.eye(4) * 0.5  # プロセスノイズ（要調整）
+
     def get_center(self):
         """
         現在のバウンディングボックス中心座標を取得。
@@ -292,11 +313,21 @@ class Person:
         Returns: (int, int): (中心x, 中心y)
         """
         x, y, w, h = self.box
-        return (x + w//2, y + h//2)
+        return (int(x + w//2), int(y + h//2))
+
+    def predict(self):
+        """
+        カルマンフィルタによる次フレーム位置予測。戻り値は推定中心座標(int, int)。
+
+        Returns: (int, int): 予測中心座標 (center_x, center_y)
+        """
+        self.kf.predict()
+        pred_cx, pred_cy = self.kf.x[:2]
+        return (int(pred_cx), int(pred_cy))
 
     def update(self, box):
         """
-        新しい検出ボックス情報で人物情報を更新。
+        新しい検出ボックス情報で人物情報を更新し、カルマンフィルタにも観測値を反映。
 
         Args: box (list or tuple): [x, y, w, h]形式のバウンディングボックス
         """
@@ -307,6 +338,18 @@ class Person:
         if len(self.trajectory) > 30:
             self.trajectory.pop(0)
         self.last_seen = time.time()               # 最終確認時刻を更新
+
+    def get_predicted_box(self):
+        """
+        カルマンフィルタによる予測中心・直近のサイズでバウンディングボックスを算出。
+
+        Returns: [x, y, w, h] 形式の予測バウンディングボックス
+        """
+        pred_cx, pred_cy = self.kf.x[:2]
+        w, h = self.box[2], self.box[3]
+        pred_x = int(pred_cx - w//2)
+        pred_y = int(pred_cy - h//2)
+        return [pred_x, pred_y, w, h]
 
     def get_avg_motion(self, window=None):
         """
@@ -557,22 +600,14 @@ class PeopleFlowManager:
         # 既存の追跡ターゲット（active_people）と新たな検出結果（detections）との間で、
         # 各組み合わせペアごとに「重なり具合（IoU）」と「中心間距離」を算出し、総合的なコストを定義。
         for i, person in enumerate(active_people):
-            # ------- 予測中心点を計算 -------
-            avg_motion = person.get_avg_motion()
-            pred_center = (
-                person.trajectory[-1][0] + avg_motion[0],
-                person.trajectory[-1][1] + avg_motion[1]
-            )
+            # ------- カルマンフィルタによる次フレーム位置予測を実行 -------
+            # この呼び出しで Kalman フィルタの内部状態 (self.kf.x) が次フレームの状態に更新される
+            # この戻り値が、次のフレームで人物がいると予測される中心座標
+            predicted_center = person.predict()
 
-            # ------- 予測ボックスを作成 -------
-            # 現在のBoxサイズは維持しつつ、中心点のみ「予測位置」に移動したboxを作る
-            w, h = person.box[2], person.box[3]
-            pred_box = [
-                pred_center[0] - w // 2,   # 左上x（予測中心x - 幅/2）
-                pred_center[1] - h // 2,   # 左上y（予測中心y - 高さ/2）
-                w,                         # 幅
-                h                          # 高さ
-            ]
+            # ------- 予測ボックスを取得 -------
+            # get_predicted_box は、predict() で更新された self.kf.x を参照して予測ボックスを作成する
+            predicted_box = person.get_predicted_box()
 
             # ------- 検出結果（detections）とコスト計算 -------
             for j, detection in enumerate(detections):
@@ -586,11 +621,11 @@ class PeopleFlowManager:
                 # --- 距離・IoU計算 ---
                 # 【距離】予測中心点と検出中心点とのユークリッド距離（ピクセル単位）
                 distance = np.sqrt(
-                    (pred_center[0] - detection_center[0]) ** 2 +
-                    (pred_center[1] - detection_center[1]) ** 2
+                    (predicted_center[0] - detection_center[0]) ** 2 +
+                    (predicted_center[1] - detection_center[1]) ** 2
                 )
                 # 【IoU】予測ボックスと検出boxのIoU（重なり率：0~1）
-                iou = self._calculate_iou(pred_box, detection_box)
+                iou = self._calculate_iou(predicted_box, detection_box)
                 # --- 総合コストの定義 ---
                 # 距離が近くIoUが大きい（よく重なっている）ほどコストが小さくなるよう設計
                 # → IoU大・距離小の組み合わせほどcostは小さい（良いマッチングと見なされる）
@@ -599,6 +634,7 @@ class PeopleFlowManager:
                 cost = (1.0 - iou) + (distance / 200.0)  # 200pxを「最大許容距離」とするスケーリング
 
                 # costにX軸方向の一貫性重視ペナルティ
+                avg_motion = person.get_avg_motion()
                 avg_motion_x = avg_motion[0]
                 intended_dir = np.sign(avg_motion_x)
                 actual_dir = np.sign(detection_center[0] - person.trajectory[-1][0])
@@ -674,8 +710,8 @@ class PeopleFlowManager:
                         lost_cx, _ = lost_person.get_center()
                         # detection（新検出）の中心座標取得
                         det_cx, _ = detection.get_center()
-                        # lost_personの移動平均（過去フレームからの平均速度・方向）取得
-                        avg_dx, avg_dy = lost_person.get_avg_motion()
+                        # Kalman Filterの推定速度
+                        avg_dx, avg_dy = lost_person.kf.x[2], lost_person.kf.x[3]
                         # x方向の検出位置のズレ
                         diff_x = det_cx - lost_cx
 
@@ -689,7 +725,7 @@ class PeopleFlowManager:
                             height_ratio = 0
                         else:
                             height_ratio = det_height / lost_height
-                        HEIGHT_SIMILARITY_THRESHOLD = 0.08  # 許容する割合）
+                        HEIGHT_SIMILARITY_THRESHOLD = 0.90  # 許容する割合
                         height_similar = (1.0 - HEIGHT_SIMILARITY_THRESHOLD) <= height_ratio <= (1.0 + HEIGHT_SIMILARITY_THRESHOLD)
 
                         # --- 中心線からの位置条件を移動方向に応じて判定 ---
