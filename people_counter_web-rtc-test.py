@@ -57,6 +57,7 @@ class Parameter:
         self.direction_mismatch_penalty = self.config.get('DIRECTION_MISMATCH_PENALTY')         # 逆方向へのマッチに与える追加コスト
         self.max_acceptable_cost        = self.config.get('MAX_ACCEPTABLE_COST')                # 最大許容コスト
         self.min_box_height             = self.config.get('MIN_BOX_HEIGHT')                     # 人物ボックスの高さフィルタ。これより小さいBoxは排除(ピクセル)
+        self.max_box_height             = self.config.get('MAX_BOX_HEIGHT')                     # 人物ボックスの高さフィルタ。これより大きいBoxは排除(ピクセル)
         self.output_dir                 = self.config.get('OUTPUT_DIR', 'people_count_data')    # ログデータを保存するディレクトリ名
         self.debug_mode                 = str(self.config.get('DEBUG_MODE', 'False')).lower() == 'true'
         self.debug_images_subdir_name   = self.config.get('DEBUG_IMAGES_SUBDIR_NAME', 'debug_images')
@@ -252,9 +253,11 @@ class Detection:
                 )
                 for box, score, category in selected
             ]
-            # フィルタ: 最小ボックス高さ未満の検出を除去
-            detections = [det for det in detections if det.box[3] >= parameters.min_box_height]
-
+            # フィルタ: 最小ボックス高さ未満・最大ボックス高さ超過の検出を除去
+            detections = [
+                det for det in detections
+                if parameters.min_box_height <= det.box[3] <= parameters.max_box_height
+            ]
             return detections
         
         except Exception as e:
@@ -332,7 +335,9 @@ class Person:
         Args: box (list or tuple): [x, y, w, h]形式のバウンディングボックス
         """
         self.box = box
-        self.trajectory.append(self.get_center())  # 軌跡に現フレーム中心値を追加
+        obs_cx, obs_cy = self.get_center()
+        self.kf.update([obs_cx, obs_cy])
+        self.trajectory.append((obs_cx, obs_cy))  # 軌跡に現フレーム中心値を追加
 
         # 履歴数制限：最大30件のみ保持（古い順にpopで削除）
         if len(self.trajectory) > 30:
@@ -725,7 +730,7 @@ class PeopleFlowManager:
                             height_ratio = 0
                         else:
                             height_ratio = det_height / lost_height
-                        HEIGHT_SIMILARITY_THRESHOLD = 0.90  # 許容する割合
+                        HEIGHT_SIMILARITY_THRESHOLD = 0.95  # 許容する割合
                         height_similar = (1.0 - HEIGHT_SIMILARITY_THRESHOLD) <= height_ratio <= (1.0 + HEIGHT_SIMILARITY_THRESHOLD)
 
                         # --- 中心線からの位置条件を移動方向に応じて判定 ---
