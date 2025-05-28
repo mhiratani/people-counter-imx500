@@ -26,7 +26,7 @@
         await pc.setLocalDescription(offer);
 
         // シグナリング送信: サーバへSDP offerをPOST
-        const response = await fetch("http://192.168.10.11:8080/offer", {
+        const response = await fetch("http://192.168.10.11:8443/offer", {
             method: "POST",
             body: JSON.stringify({
                 sdp: pc.localDescription.sdp,

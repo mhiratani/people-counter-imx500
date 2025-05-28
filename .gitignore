@@ -3,3 +3,4 @@ people-count-data/*
 __pycache__/*
 *.json
 .env
+*.pem

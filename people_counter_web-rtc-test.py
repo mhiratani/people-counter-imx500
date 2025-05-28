@@ -20,6 +20,7 @@ from picamera2.devices.imx500.postprocess import scale_boxes
 import modules
 
 # webRTC配信プロセス用
+import ssl
 import threading
 import asyncio
 from aiortc import VideoStreamTrack, RTCPeerConnection, RTCSessionDescription
@@ -1065,6 +1066,7 @@ async def offer(request):
     headers = {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': '*',
+        'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
     }
     try:
         params = await request.json()
@@ -1109,7 +1111,9 @@ async def web_server(stop_event):
     app.router.add_options('/offer', options_handler)  # 追加
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    ssl_context.load_cert_chain(certfile="cert.pem", keyfile="key.pem")
+    site = web.TCPSite(runner, '0.0.0.0', 8443, ssl_context=ssl_context)
     await site.start()
     print("WebRTC signaling server started")
     try:

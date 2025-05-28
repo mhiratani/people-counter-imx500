@@ -165,11 +165,23 @@ vim camera_name.json
 }
 ```
 
+#### WebRTCを用いて映像配信する場合
+- 以下のコマンドを実行して、自己証明書を作成してください。
+
+```bash
+# 自己証明書を作成する
+openssl req -x509 -nodes -newkey rsa:2048 -keyout key.pem -out cert.pem
+```
+- 視聴する側については`web-rtc-viewer-light.html`を参照してください。
+
 ### 5. アプリケーションの実行
 
 ```bash
 # プログラム実行(RTSP配信したい場合はRTSP_SERVER_IPを記載したら動作します)
 python people_counter.py
+
+# プログラム実行(WebRTCで配信したい場合)
+python people_counter_web-rtc-test.py
 
 # ラズパイ側で解析しないで、データを流してサーバ側で解析したい場合
 python people_detection_stream.py
