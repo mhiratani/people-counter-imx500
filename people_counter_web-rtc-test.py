@@ -896,7 +896,7 @@ class PeopleFlowManager:
                 
                 # 人物の方向によって色を変える
                 if person.crossed_direction == "left_to_right":
-                    color = (0, 255, 0)  # 緑: 左から右
+                    color = (0, 128, 0)  # 緑: 左から右
                 elif person.crossed_direction == "right_to_left":
                     color = (0, 0, 255)  # 赤: 右から左
                 else:
@@ -917,7 +917,7 @@ class PeopleFlowManager:
             # カウント情報を表示
             total_counts = self.counter.get_total_counts()
             cv2.putText(m.array, f"right_to_left: {total_counts['right_to_left']}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            cv2.putText(m.array, f"left_to_right: {total_counts['left_to_right']}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(m.array, f"left_to_right: {total_counts['left_to_right']}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 128, 0), 2)
             # 時刻とフレームIDを表示
             text_str = f"FrameID: {frame_id} / {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             cv2.putText(m.array, text_str, (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
