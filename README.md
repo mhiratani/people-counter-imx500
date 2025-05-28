@@ -141,13 +141,21 @@ vim config.json
 # OUTPUT_PREFIX　出力ファイル名のプレフィックス(カメラ名はcamera_name.jsonから取得)
 # DEBUG_MODE デバッグモードのオン/オフ
 # RTSP_SERVER_IP RTSPサーバが動いているIPアドレス。RTSPでストリーム配信したいときに記載。不要の場合'None'を記載する(例 : 'rtsp://127.0.0.1')
+```
 
 #### AWSに設定ファイルをバックアップしたい場合
+
+- 以下のコマンドを実行して、カメラ名を設定してください。
+- カメラ名設定とともに、`config.json`をアップロードをします。
+- 事前に`config.json`と.`env`を作成してください。
+- `.env`に環境変数(S3_BUCKET_NAME)を記載してください。
+
 ```python
 # カメラ名の設定
 python setup.py
 ```
 
+##### カメラ名のルールに付いて
 - camera で始めてほしい
 - OK例 : `camera1_2024-06-01_001`
 - OK例 : `cameraABC_2024-05-15_999`
@@ -156,6 +164,7 @@ python setup.py
 
 
 #### AWSに設定ファイルをバックアップする必要がない場合
+- 手動で`camera_name.json`を直接カメラ名を設定してください。
 ```bash
 # カメラ名ファイルを作成する
 vim camera_name.json
