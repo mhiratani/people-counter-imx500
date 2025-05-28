@@ -27,7 +27,7 @@ from aiortc import VideoStreamTrack, RTCPeerConnection, RTCSessionDescription
 from aiohttp import web
 from av import VideoFrame
 # グローバルでQueue用意 
-frame_queue = asyncio.Queue(maxsize=120)
+frame_queue = asyncio.Queue(maxsize=5)
 
 # 描画設定
 import cv2
@@ -101,7 +101,7 @@ class CameraTrack(VideoStreamTrack):
 
         try:
             # 1秒以内にキューからフレームを受け取る。タイムアウトなら例外送出。
-            frame = await asyncio.wait_for(self.queue.get(), timeout=1.0)
+            frame = await asyncio.wait_for(self.queue.get(), timeout=0.5)
             # print("CameraTrack got frame from queue!", frame.shape, frame.dtype, frame.max(), frame.min())  # デバッグ用
 
             # OpenCV画像が偶数高さ・幅でなければ切り詰める（YUV420p変換時に必要）
@@ -930,6 +930,21 @@ class PeopleFlowManager:
                 frame_to_send = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
             else:
                 frame_to_send = frame.copy()
+
+            # 解像度変更して処理負荷を軽減したいとき
+            original_height, original_width = frame_to_send.shape[0], frame_to_send.shape[1]
+            # 例えば、幅を 480、高さをアスペクト比を維持して計算
+            # target_width = 480
+            target_width = original_width
+            target_height = int(original_height * (target_width / original_width))
+            
+            # 必ず偶数になるように調整 (YUV420p向け)
+            target_width = target_width // 2 * 2
+            target_height = target_height // 2 * 2
+
+            if original_width != target_width or original_height != target_height:
+                frame_to_send = cv2.resize(frame_to_send, (target_width, target_height), interpolation=cv2.INTER_AREA)
+
             # キューに入れる
             if not frame_queue.full():
                 try:
