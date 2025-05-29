@@ -7,6 +7,8 @@ from datetime import datetime
 from functools import lru_cache
 import numpy as np
 from scipy.optimize import linear_sum_assignment    # scipyの線形割当アルゴリズム
+from dataclasses import dataclass
+from typing import Optional, Set, List
 
 # NMS(Non-Maximum Suppression)適用
 import torch
@@ -55,6 +57,7 @@ class Parameter:
         self.recovery_distance_px       = self.config.get('RECOVERY_DISTANCE_PX')               # 過去の人物と新しい検出の中心座標（x）の距離が 何ピクセル以内なら「同一人物が復帰した」とみなすかの閾値
         self.tracking_timeout           = self.config.get('TRACKING_TIMEOUT')                   # 人物を追跡し続ける最大時間（秒）
         self.active_timeout_sec         = self.config.get('ACTIVE_TIMEOUT_SEC')                 # lost_people保持猶予(秒)
+        self.distance_cost_normalize_px = self.config.get('DISTANCE_COST_NORMALIZE_PX')         # 距離正規化用(px)距離をこの値で割った値をコストとする
         self.direction_mismatch_penalty = self.config.get('DIRECTION_MISMATCH_PENALTY')         # 逆方向へのマッチに与える追加コスト
         self.max_acceptable_cost        = self.config.get('MAX_ACCEPTABLE_COST')                # 最大許容コスト
         self.min_box_height             = self.config.get('MIN_BOX_HEIGHT')                     # 人物ボックスの高さフィルタ。これより小さいBoxは排除(ピクセル)
@@ -524,6 +527,18 @@ class PeopleFlowManager:
     人物検出・追跡・人数カウント・ライン横断判定・可視化の全体管理クラス。
     1フレームごとに検出〜追跡〜カウント〜描画〜ログ〜定期保存までを一元管理する。
     """
+    @dataclass
+    class MatchingResult:
+        """マッチング結果を格納するデータクラス"""
+        matched_people: List
+        used_detections: Set[int]
+        used_people: Set[int]
+
+    @dataclass
+    class RecoveryResult:
+        """復帰処理結果を格納するデータクラス"""
+        recovered: bool
+        detection_index: Optional[int]
 
     def __init__(self, config, loop, counter, directoryInfo, intrinsics, camera, parameters):
         """
@@ -644,36 +659,69 @@ class PeopleFlowManager:
         検出結果（detections）と既存追跡リスト（active_people）をマッチングし更新。
         ハンガリアン法＋IoU＋中心距離＋方向ペナルティで追跡管理。
         一時的なロスト復帰、完全ロスト削除も管理。
-
+        new_active_peopleの中身は
+            # 1. 初期マッチングで更新された active_people (既存オブジェクト)
+            # 2. ロストから復帰した lost_people (既存オブジェクト)
+            # 3. どの既存人物とも対応付けられなかった新規検出 (新しいオブジェクト)
         Args:
             active_people (list): 現在追跡中の人物リスト
             lost_people (list): 一時ロスト中人物リスト
             detections (list[Detection]): 今フレームの検出結果リスト
             frame_id: フレームID
             center_line_x: ラインカウント座標
-
+            
         Returns: tuple: (new_active_people, new_lost_people)
         """
-        num_people = len(active_people)
-        num_detections = len(detections)
-
         # 検出結果も追跡対象もいない場合はそのまま返す
-        if num_detections == 0 and num_people == 0:
+        if not detections and not active_people:
             return [], lost_people
-
-        # 新しい検出結果がない場合、既存の追跡対象は維持（ただし後にタイムアウトで削除される）
-        if num_detections == 0:
+        if not detections:
+            return active_people, lost_people
+        if not active_people:
+            return [Person(det.box) for det in detections], lost_people
+        
+        # メインの追跡処理
+        try:
+            return self._perform_tracking(active_people, lost_people, detections, frame_id, center_line_x)
+        except Exception as e:
+            self._log_tracking_error(e, frame_id, active_people, detections)
             return active_people, lost_people
 
-        # 追跡対象がいない場合、全ての検出を新しい人物とする
-        if num_people == 0:
-            return [Person(det.box) for det in detections], lost_people
+    def _perform_tracking(self, active_people, lost_people, detections, frame_id, center_line_x):
+        """メインの追跡処理を実行"""
+        # コスト行列の作成
+        cost_matrix = self._build_cost_matrix(active_people, detections)
+        
+        # マッチング不可能な場合の処理
+        if not self._is_matching_feasible(cost_matrix):
+            return active_people, lost_people
+        
+        # ハンガリアン法によるマッチング実行
+        matched_pairs = self._execute_hungarian_matching(cost_matrix)
+        
+        # マッチング結果の処理
+        tracking_result = self._process_matching_results(
+            active_people, detections, matched_pairs, cost_matrix
+        )
+        
+        # ロスト人物の管理
+        updated_lost_people = self._manage_lost_people(
+            active_people, lost_people, detections, tracking_result, center_line_x
+        )
+        
+        # 新規人物の追加
+        final_active_people = self._add_new_people(
+            tracking_result.matched_people, detections, tracking_result.used_detections
+        )
+        
+        return final_active_people, updated_lost_people
 
-        # コスト行列を作成
-        # 行: active_people, 列: detections
-        # コストは小さいほど良い。マッチング不可能なペアには大きな値 (inf) を設定
+    def _build_cost_matrix(self, active_people, detections):
+        """コスト行列を構築"""
+        num_people = len(active_people)
+        num_detections = len(detections)
         cost_matrix = np.full((num_people, num_detections), np.inf)
-
+        
         # コスト行列を計算するループ
         # 既存の追跡ターゲット（active_people）と新たな検出結果（detections）との間で、
         # 各組み合わせペアごとに「重なり具合（IoU）」と「中心間距離」を算出し、総合的なコストを定義。
@@ -686,187 +734,342 @@ class PeopleFlowManager:
             # ------- 予測ボックスを取得 -------
             # get_predicted_box は、predict() で更新された self.kf.x を参照して予測ボックスを作成する
             predicted_box = person.get_predicted_box()
-
+            
             # ------- 検出結果（detections）とコスト計算 -------
             for j, detection in enumerate(detections):
-                detection_box = detection.box
-                # 検出ボックスの中心座標（x, y）を計算
-                detection_center = (
-                    detection_box[0] + detection_box[2] // 2,   # 検出boxの中心x
-                    detection_box[1] + detection_box[3] // 2    # 検出boxの中心y
+                cost = self._calculate_matching_cost(
+                    person, detection, predicted_center, predicted_box
                 )
+                cost_matrix[i, j] = cost
+        
+        return cost_matrix
 
-                # --- 距離・IoU計算 ---
-                # 【距離】予測中心点と検出中心点とのユークリッド距離（ピクセル単位）
-                distance = np.sqrt(
-                    (predicted_center[0] - detection_center[0]) ** 2 +
-                    (predicted_center[1] - detection_center[1]) ** 2
-                )
-                # 【IoU】予測ボックスと検出boxのIoU（重なり率：0~1）
-                iou = self._calculate_iou(predicted_box, detection_box)
-                # --- 総合コストの定義 ---
-                # 距離が近くIoUが大きい（よく重なっている）ほどコストが小さくなるよう設計
-                # → IoU大・距離小の組み合わせほどcostは小さい（良いマッチングと見なされる）
-                # 例: 距離200px以上はコスト+1, IoU 1.0→加点ゼロ, IoU 0→+1
-                # ------- コスト計算 -------
-                cost = (1.0 - iou) + (distance / 200.0)  # 200pxを「最大許容距離」とするスケーリング
+    def _calculate_matching_cost(self, person, detection, predicted_center, predicted_box):
+        """個別のマッチングコストを計算"""
+        detection_box = detection.box
+        detection_center = self._get_box_center(detection_box)
+        
+        # --- 距離・IoU計算 ---
+        # 【距離】予測中心点と検出中心点とのユークリッド距離（ピクセル単位）
+        distance = self._calculate_euclidean_distance(predicted_center, detection_center)
+        # 【IoU】予測ボックスと検出boxのIoU（重なり率：0~1）
+        iou = self._calculate_iou(predicted_box, detection_box)
+        # --- 総合コストの定義 ---
+        # 距離が近くIoUが大きい（よく重なっている）ほどコストが小さくなるよう設計
+        # → IoU大・距離小の組み合わせほどcostは小さい（良いマッチングと見なされる）
+        # 例: 距離をdistance_cost_normalize_pxで割った値を加点, IoU 1.0→加点ゼロ, IoU 0→+1
+        # ------- コスト計算 -------
+        base_cost = (1.0 - iou) + (distance / self.parameters.distance_cost_normalize_px)
+        
+        # costにX軸方向の一貫性重視ペナルティ
+        direction_penalty = self._calculate_direction_penalty(person, detection_center)
+        
+        return base_cost + direction_penalty
 
-                # costにX軸方向の一貫性重視ペナルティ
-                avg_motion = person.get_avg_motion()
-                avg_motion_x = avg_motion[0]
-                intended_dir = np.sign(avg_motion_x)
-                actual_dir = np.sign(detection_center[0] - person.trajectory[-1][0])
-                if intended_dir != 0 and actual_dir != 0 and intended_dir != actual_dir:
-                    cost += self.parameters.direction_mismatch_penalty  # 逆方向へのマッチにペナルティを追加
+    def _calculate_direction_penalty(self, person, detection_center):
+        """方向の一貫性に基づくペナルティを計算"""
+        avg_motion = person.get_avg_motion()
+        avg_motion_x = avg_motion[0]
+        if avg_motion_x == 0 or len(person.trajectory) == 0:
+            return 0
+        
+        intended_dir = np.sign(avg_motion_x)
+        actual_dir = np.sign(detection_center[0] - person.trajectory[-1][0])
+        if intended_dir != 0 and actual_dir != 0 and intended_dir != actual_dir:
+            return self.parameters.direction_mismatch_penalty   # 逆方向へのマッチにペナルティを追加
+        
+        return 0
 
-                cost_matrix[i, j] = cost  # コスト行列の値を格納
+    def _is_matching_feasible(self, cost_matrix):
+        """マッチングが実行可能かどうかを判定"""
+        if np.all(np.isinf(cost_matrix)):
+            return False
+        if np.any(np.all(np.isinf(cost_matrix), axis=0)):
+            return False
+        if np.any(np.all(np.isinf(cost_matrix), axis=1)):
+            return False
+        if np.sum(np.isfinite(cost_matrix)) < max(cost_matrix.shape):
+            return False
+        return True
 
+    def _execute_hungarian_matching(self, cost_matrix):
+        """ハンガリアン法を実行してマッチングペアを取得"""
+        # matched_person_indices: active_peopleのインデックスの配列
+        # matched_detection_indices: detectionsのインデックスの配列
+        matched_person_indices, matched_detection_indices = linear_sum_assignment(cost_matrix)
+        return list(zip(matched_person_indices, matched_detection_indices))
 
-        # コスト行列の全要素がinf or どの行or列も全てinfならreturn
-        if (
-            np.all(np.isinf(cost_matrix)) or 
-            np.any(np.all(np.isinf(cost_matrix), axis=0)) or 
-            np.any(np.all(np.isinf(cost_matrix), axis=1)) or
-            np.sum(np.isfinite(cost_matrix)) < max(cost_matrix.shape)   # 有限値の要素数 < 行or列の大きいほう（マッチングに必要な最小数）なら諦める
-        ):
-            # print("Assignment infeasible: some row or column is all inf.")
-            return active_people, lost_people
-        else:
-            # ハンガリアンアルゴリズムを実行し、最適なマッチングを見つける
-            # matched_person_indices: active_peopleのインデックスの配列
-            # matched_detection_indices: detectionsのインデックスの配列
-            try:
-                matched_person_indices, matched_detection_indices = linear_sum_assignment(cost_matrix)
+    def _process_matching_results(self, active_people, detections, matched_pairs, cost_matrix):
+        """マッチング結果を処理"""
+        # リスト・セットを初期化
+        matched_people = []      # 正常にマッチした人物のリスト
+        used_detections = set()  # 使用済み検出結果のインデックスセット
+        used_people = set()      # 使用済み人物のインデックスセット
 
-                # マッチング結果を処理
-                new_people = []
-                # マッチした検出結果のインデックスを記録 (初期マッチングで使用されたもの)
-                used_detections = set()
-                used_person = set()
+        # コストが高すぎる場合は不一致とみなす
+        # マッチした人物を更新して新しいリストに追加
+        for person_idx, detection_idx in matched_pairs:
+            cost = cost_matrix[person_idx, detection_idx]   # マッチングペアのコスト（類似度の逆数）を取得
+            
+            # コストが閾値未満の場合のみ有効なマッチとして処理
+            if cost < self.parameters.max_acceptable_cost:
+                # 対応する人物オブジェクトと検出結果を取得
+                person = active_people[person_idx]
+                detection = detections[detection_idx]
+                
+                # 人物の位置情報を検出結果で更新
+                person.update(detection.box)
+                
+                # 処理結果をそれぞれのコレクションに追加
+                matched_people.append(person)           # マッチした人物をリストに追加
+                used_people.add(person_idx)             # 使用済み人物インデックスを記録
+                used_detections.add(detection_idx)      # 使用済み検出結果インデックスを記録
+        
+        return self.MatchingResult(matched_people, used_detections, used_people)
 
-                # コストが高すぎる場合は不一致とみなす
-                # マッチした人物を更新して新しいリストに追加
-                for i, j in zip(matched_person_indices, matched_detection_indices):
-                    # コストがinfの場合は有効なマッチではないのでスキップ (linear_sum_assignmentはinfも考慮する)
-                    if cost_matrix[i, j] < self.parameters.max_acceptable_cost:
-                        person = active_people[i]
-                        detection = detections[j]
-                        person.update(detection.box)
-                        new_people.append(person)
-                        used_person.add(i)       # この人物はマッチに使用された
-                        used_detections.add(j)   # *** この検出結果は初期マッチに使用された ***
-                    else:
-                        # コストが高すぎる場合はマッチとして使用しない
-                        pass # 不一致
+    def _manage_lost_people(self, active_people, lost_people, detections, tracking_result, center_line_x):
+        """ロスト人物の管理（新規ロスト追加、復帰処理、タイムアウト削除）"""
+        current_time = time.time()
+        
+        # 新規ロスト人物の追加
+        updated_lost_people = self._add_newly_lost_people(
+            active_people, lost_people, tracking_result.used_people, current_time
+        )
+        
+        # 復帰処理
+        recovered_people, updated_lost_people, additional_used_detections = self._process_recovery(
+            updated_lost_people, detections, tracking_result.used_detections, 
+            center_line_x, current_time
+        )
+        
+        # 復帰した人物をマッチング結果に追加
+        tracking_result.matched_people.extend(recovered_people)
+        tracking_result.used_detections.update(additional_used_detections)
+        
+        # タイムアウトした人物の削除
+        updated_lost_people = self._remove_timed_out_people(updated_lost_people, current_time)
+        
+        return updated_lost_people
 
-                # マッチしなかったactive_peopleを一時ロストの候補とし、lost_peopleリストへ追加
-                now = time.time()
-                for i, person in enumerate(active_people):
-                    if i not in used_person:
-                        person.lost_start_time = now        # ロスト開始時刻を記録
-                        person.lost_last_box = person.box   # ロスト時のボックスを記録
-                        lost_people.append(person)          # lost_peopleリストに追加
+    def _add_newly_lost_people(self, active_people, lost_people, used_people, current_time):
+        """新たにロストした人物をlost_peopleに追加"""
+        updated_lost_people = lost_people.copy()
+        
+        for i, person in enumerate(active_people):
+            if i not in used_people:
+                person.lost_start_time = current_time
+                person.lost_last_box = person.box
+                updated_lost_people.append(person)
+        
+        return updated_lost_people
 
-                # lost_peopleからも「復帰」判定！
-                recovered = []
-                # ここでは全ての検出結果を見るが、すでにused_detectionsにあるものは復帰には使われないように制御する
-                for j, detection in enumerate(detections): # enumerateでインデックスjも取得
-                    if j in used_detections:
-                        continue # この検出結果は既に初期マッチングで使用されたので、復帰には使わない
+    def _process_recovery(self, lost_people, detections, used_detections, center_line_x, current_time):
+        """ロスト人物の復帰処理"""
+        recovered_people = []
+        additional_used_detections = set()
+        remaining_lost_people = []
+        
+        for lost_person in lost_people:
+            recovery_result = self._attempt_recovery(
+                lost_person, detections, used_detections, center_line_x, current_time
+            )
+            
+            if recovery_result.recovered:
+                recovered_people.append(lost_person)
+                additional_used_detections.add(recovery_result.detection_index)
+            else:
+                remaining_lost_people.append(lost_person)
+        
+        return recovered_people, remaining_lost_people, additional_used_detections
 
-                    # 各ロスト人物に対して復帰可能かチェック
-                    for lost_person in lost_people:
-                        # 一度復帰したlost_personは再度このフレームで復帰させない → recoveredリストで管理
-                        if lost_person in recovered:
-                            continue
+    def _attempt_recovery(self, lost_person, detections, used_detections, center_line_x, current_time):
+        """個別のロスト人物の復帰を試行"""
+        if lost_person.crossed_direction is not None:
+            return self.RecoveryResult(False, None)
+        
+        for j, detection in enumerate(detections):
+            if j in used_detections:
+                continue
+            
+            if self._can_recover(lost_person, detection, center_line_x, current_time):
+                lost_person.update(detection.box)
+                return self.RecoveryResult(True, j)
+        
+        return self.RecoveryResult(False, None)
 
-                        if lost_person.crossed_direction is not None:
-                            continue # このlost_personは既にカウント済みなのでスキップ
+    def _can_recover(self, lost_person, detection, center_line_x, current_time):
+        """
+        ロスト人物が新しい検出結果で復帰可能かどうかを判定
+        
+        復帰条件：
+        1. 時間条件：ロスト開始から規定時間以内
+        2. 位置条件：ロスト位置と検出位置の距離が許容範囲内
+        3. 方向条件：移動方向の一貫性が保たれている
+        4. 高さ条件：ボックス高さの類似度が許容範囲内
+        5. 中心線条件：中心線に対する位置が移動方向と整合している
+        
+        Args:
+            lost_person: 復帰を試行するロスト人物
+            detection: 復帰候補の検出結果
+            center_line_x: カウントライン座標（Noneの場合は中心線条件をスキップ）
+            current_time: 現在時刻
+            
+        Returns:
+            bool: 復帰可能な場合True、不可能な場合False
+        """
+        # 時間条件チェック
+        if not self._check_time_condition(lost_person, current_time):
+            return False
+        
+        # 位置条件チェック
+        if not self._check_position_condition(lost_person, detection):
+            return False
+        
+        # 方向条件チェック
+        if not self._check_direction_condition(lost_person, detection):
+            return False
+        
+        # 高さ条件チェック
+        if not self._check_height_condition(lost_person, detection):
+            return False
+        
+        # 中心線条件チェック
+        if center_line_x and not self._check_center_line_condition(lost_person, center_line_x):
+            return False
+        
+        # すべての条件を満たした場合、復帰可能と判定
+        return True
 
-                        # ---- 復帰判定の各種条件 ----
-                        # lost_person（見失った人）の中心座標取得
-                        lost_cx, _ = lost_person.get_center()
-                        det_cx, _ = detection.get_center()
-                        # Kalman Filterの推定速度
-                        avg_dx, avg_dy = lost_person.kf.x[2], lost_person.kf.x[3]
-                        # x方向の検出位置のズレ
-                        diff_x = det_cx - lost_cx
+    def _check_time_condition(self, lost_person, current_time):
+        """
+        時間条件のチェック：ロスト開始から規定時間以内か
+        
+        Args:
+            lost_person: チェック対象のロスト人物
+            current_time: 現在時刻
+            
+        Returns:
+            bool: 時間条件を満たす場合True
+        """
+        return current_time - lost_person.lost_start_time < self.parameters.active_timeout_sec
 
-                        # lost_personの移動方向と、新たな検出位置の方向が一致しているか？
-                        same_direction = (avg_dx * diff_x > 0)
+    def _check_position_condition(self, lost_person, detection):
+        """
+        位置条件のチェック：ロスト位置と検出位置の距離が許容範囲内か
+        
+        Args:
+            lost_person: チェック対象のロスト人物
+            detection: 復帰候補の検出結果
+            
+        Returns:
+            bool: 位置条件を満たす場合True
+        """
+        lost_cx, _ = lost_person.get_center()
+        det_cx, _ = detection.get_center()
+        diff_x = abs(det_cx - lost_cx)
+        return diff_x < self.parameters.recovery_distance_px
 
-                        # ボックス高さの近似条件
-                        lost_height = lost_person.get_box_height()
-                        det_height = detection.get_box_height()
-                        if lost_height == 0:  # ゼロ除算対策
-                            height_ratio = 0
-                        else:
-                            height_ratio = det_height / lost_height
-                        HEIGHT_SIMILARITY_THRESHOLD = 0.95  # 許容する割合
-                        height_similar = (1.0 - HEIGHT_SIMILARITY_THRESHOLD) <= height_ratio <= (1.0 + HEIGHT_SIMILARITY_THRESHOLD)
+    def _check_direction_condition(self, lost_person, detection):
+        """
+        方向条件のチェック：移動方向の一貫性が保たれているか
+        
+        過去の移動方向と、ロスト位置から検出位置への方向が一致するかを確認
+        
+        Args:
+            lost_person: チェック対象のロスト人物
+            detection: 復帰候補の検出結果
+            
+        Returns:
+            bool: 方向条件を満たす場合True
+        """
+        lost_cx, _ = lost_person.get_center()
+        det_cx, _ = detection.get_center()
+        avg_dx, _ = lost_person.kf.x[2], lost_person.kf.x[3]
+        diff_x = det_cx - lost_cx
+        return avg_dx * diff_x > 0
 
-                        # --- 中心線からの位置条件を移動方向に応じて判定 ---
-                        is_on_correct_side_of_line_within_margin = False
-                        margin = self.parameters.center_line_margin_px
+    def _check_height_condition(self, lost_person, detection):
+        """
+        高さ条件のチェック：ボックス高さの類似度が許容範囲内か
+        
+        同一人物であれば体格（ボックス高さ）は大きく変わらないという前提
+        
+        Args:
+            lost_person: チェック対象のロスト人物
+            detection: 復帰候補の検出結果
+            
+        Returns:
+            bool: 高さ条件を満たす場合True
+        """
+        lost_height = lost_person.get_box_height()
+        det_height = detection.get_box_height()
+        if lost_height == 0:  # ゼロ除算対策
+            return False
+        
+        height_ratio = det_height / lost_height
+        HEIGHT_SIMILARITY_THRESHOLD = 0.95    # 許容する割合
+        return (1.0 - HEIGHT_SIMILARITY_THRESHOLD) <= height_ratio <= (1.0 + HEIGHT_SIMILARITY_THRESHOLD)
 
-                        if center_line_x is not None: # 中心線が有効な場合のみ判定
-                            if avg_dx > 0: # 右方向に移動している場合 (手前側は左側)
-                                # lost_cxが [center_line_x - margin, center_line_x] の範囲内にあるか
-                                if center_line_x - margin <= lost_cx <= center_line_x:
-                                    is_on_correct_side_of_line_within_margin = True
-                            elif avg_dx < 0: # 左方向に移動している場合 (手前側は右側)
-                                # lost_cxが [center_line_x, center_line_x + margin] の範囲内にあるか
-                                if center_line_x <= lost_cx <= center_line_x + margin:
-                                    is_on_correct_side_of_line_within_margin = True
+    def _check_center_line_condition(self, lost_person, center_line_x):
+        """
+        中心線条件のチェック：中心線に対する位置が移動方向と整合しているか
+        
+        移動方向に応じて、適切な側（手前側）にいるかを確認
+        - 右向き移動：中心線の左側（手前側）にいるべき
+        - 左向き移動：中心線の右側（手前側）にいるべき
+        
+        Args:
+            lost_person: チェック対象のロスト人物
+            center_line_x: カウントラインのX座標
+            
+        Returns:
+            bool: 中心線条件を満たす場合True
+        """
+        lost_cx, _ = lost_person.get_center()
+        avg_dx = lost_person.kf.x[2]
+        margin = self.parameters.center_line_margin_px
+        
+        if avg_dx > 0: # 右方向に移動している場合 (手前側は左側)
+            # lost_cxが [center_line_x - margin, center_line_x] の範囲内にあるか
+            return center_line_x - margin <= lost_cx <= center_line_x
+        elif avg_dx < 0: # 左方向に移動している場合 (手前側は右側)
+            # lost_cxが [center_line_x, center_line_x + margin] の範囲内にあるか
+            return center_line_x <= lost_cx <= center_line_x + margin  # 許容マージン
+        
+        return False
 
-                        # ── 以下の条件をすべて満たす場合に復帰可能 ──
-                        now_check = time.time() # ここで最新時刻を取得
-                        if (
-                            center_line_x and   # 中心線が有効か
-                            is_on_correct_side_of_line_within_margin and                                        # 中心線から一定範囲（ピクセル）以内か
-                            abs(diff_x) < self.parameters.recovery_distance_px and                              # 失った位置と検出位置が近いか
-                            now_check - lost_person.lost_start_time < self.parameters.active_timeout_sec and    # 見失ってからの秒数が規定以内か
-                            same_direction and  # 進行方向も一致しているか
-                            height_similar      # ボックス高さの類似度
-                        ):
-                            # --- 復帰処理 ---
-                            print(f"recovered:{frame_id}/{lost_person.id}")
-                            lost_person.update(detection.box)       # lost_personの情報を新しい検出で更新
-                            new_people.append(lost_person)          # 新規・復帰リストに追加 (既存のPersonオブジェクト)
-                            recovered.append(lost_person)           # 復帰済みリストに追加
-                            used_detections.add(j)                  # *** この検出結果は復帰に使用されたので、新規人物作成には使わない！ ***
-                            break                                   # この検出結果で1つのロスト人物が復帰したら、他のロスト人物との比較は終了
+    def _remove_timed_out_people(self, lost_people, current_time):
+        """タイムアウトした人物を削除"""
+        return [
+            person for person in lost_people 
+            if current_time - person.lost_start_time < self.parameters.active_timeout_sec
+        ]
 
-                # 復帰したlost_peopleをlost_peopleリストから除く
-                lost_people = [p for p in lost_people if p not in recovered]
+    def _add_new_people(self, matched_people, detections, used_detections):
+        """新規人物を追加"""
+        final_people = matched_people.copy()
+        
+        for j, detection in enumerate(detections):
+            if j not in used_detections:
+                final_people.append(Person(detection.box))
+        
+        return final_people
 
-                # 完全ロスト判定
-                # ロスト開始時刻から規定時間以上経過した人物をlost_peopleから除く
-                now_final = time.time() # 最終的な時刻チェック
-                lost_people = [p for p in lost_people if now_final - p.lost_start_time < self.parameters.active_timeout_sec]
+    def _get_box_center(self, box):
+        """ボックスの中心座標を取得"""
+        return (box[0] + box[2] // 2, box[1] + box[3] // 2)
 
+    def _calculate_euclidean_distance(self, point1, point2):
+        """ユークリッド距離を計算"""
+        return np.sqrt((point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2)
 
-                # マッチしなかった (used_detectionsに含まれていない) 新しい検出結果を新しい人物としてリストに追加
-                # ここでは、初期マッチングにも復帰にも使われなかった検出結果のみが対象となる
-                for j, detection in enumerate(detections):
-                    if j not in used_detections:                    #  used_detectionsには初期マッチと復帰に使用された検出結果が含まれている
-                        new_people.append(Person(detection.box))    # 新しい人物を作成 (新しいPersonオブジェクト)
+    def _log_tracking_error(self, error, frame_id, active_people, detections):
+        """エラーログを出力"""
+        print("【Error】ハンガリアン法(マッチング)で例外発生。")
+        print(f"例外内容：{error}")
+        print(f"フレームID: {frame_id}")
+        print(f"追跡対象数: {len(active_people)}, 検出結果数: {len(detections)}")
 
-                # new_people の中身は
-                # 1. 初期マッチングで更新された active_people (既存オブジェクト)
-                # 2. ロストから復帰した lost_people (既存オブジェクト)
-                # 3. どの既存人物とも対応付けられなかった新規検出 (新しいオブジェクト)
-                return new_people, lost_people
-
-            except Exception as e:
-                print("【Error】ハンガリアン法(マッチング)で例外発生。")
-                print(f"例外内容：{e}")
-                print(f"フレームID: {frame_id}")
-                print(f"コスト行列 shape: {cost_matrix.shape}")
-                print(f"コスト行列の一部: {cost_matrix}")
-                print(f"検出結果一覧: {detections}")
-                print(f"追跡対象一覧: {active_people}")
-                return active_people, lost_people
 
     def _check_line_crossing(self, person, center_line_x, frame=None):
         """中央ラインを横切ったかチェック"""
