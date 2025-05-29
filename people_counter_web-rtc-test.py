@@ -21,6 +21,7 @@ import modules
 
 # webRTC配信プロセス用
 import ssl
+import queue
 import threading
 import asyncio
 from aiortc import VideoStreamTrack, RTCPeerConnection, RTCSessionDescription
@@ -547,6 +548,40 @@ class PeopleFlowManager:
         self.camera = camera
         self.parameters = parameters
         self.image_saved = False    # 起動時の一度きりの画像保存用
+        self.running = True
+        self.render_queue = queue.Queue(maxsize=5)
+        self.frame_skip_counter = 0
+        self.render_skip_rate = 3
+        
+        # スレッドを起動
+        self.render_thread = threading.Thread(
+            target=self._render_worker_wrapper,
+            name="RenderWorker",
+            daemon=True
+        )
+        self.render_thread.start()
+        print("PeopleFlowManager initialized successfully")
+    
+    def _start_render_worker(self):
+        """レンダーワーカーのエントリーポイント"""
+        self._render_worker()
+    
+    def _render_worker(self):
+        """別スレッドでレンダリング処理を実行"""
+        print("Render worker started")
+        while self.running:
+            try:
+                render_data = self.render_queue.get(timeout=1.0)
+                if render_data is None:  # 終了シグナル
+                    break
+                self._render_frame(render_data)
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"Render worker error: {e}")
+                import traceback
+                traceback.print_exc()
+        print("Render worker stopped")
 
     @staticmethod
     def _calculate_iou(box1, box2):
@@ -878,14 +913,73 @@ class PeopleFlowManager:
         center_line_x = frame_width // 2
         self._update_tracking(detections, frame_id, center_line_x)
         
-        # フレーム描画処理
-        self._render_frame(request, frame_height, frame_width, center_line_x, frame_id)
-        
+        # レンダリング用データをキューに追加（非ブロッキング）
+        self._queue_render_data(request, frame_height, frame_width, center_line_x, frame_id)
+
         # ライン横断チェックとカウント更新
         self._process_line_crossings(center_line_x, frame)
+
+        # 定期処理（ログ出力、データ保存、古いトラッキング削除）は別スレッドで実行
+        threading.Thread(target=self._handle_periodic_tasks, daemon=True).start()
+
+    def _queue_render_data(self, request, frame_height, frame_width, center_line_x, frame_id):
+        """レンダリング用データをキューに追加"""
+        self.frame_skip_counter += 1
         
-        # 定期処理（ログ出力、データ保存、古いトラッキング削除）
-        self._handle_periodic_tasks()
+        # フレームスキップ制御
+        if self.frame_skip_counter % self.render_skip_rate == 0:
+            # active_peopleのスナップショットを作成
+            active_people_snapshot = []
+            for person in self.active_people:
+                person_copy = type('Person', (), {})()  # オブジェクトコピー
+                person_copy.id = person.id
+                person_copy.box = person.box
+                person_copy.trajectory = person.trajectory.copy() if hasattr(person, 'trajectory') else []
+                person_copy.crossed_direction = getattr(person, 'crossed_direction', None)
+                active_people_snapshot.append(person_copy)
+            
+            render_data = {
+                'request': request,
+                'frame_height': frame_height,
+                'frame_width': frame_width,
+                'center_line_x': center_line_x,
+                'frame_id': frame_id,
+                'active_people': active_people_snapshot,
+                'counter_snapshot': self.counter.get_total_counts().copy(),
+                'image_saved': self.image_saved
+            }
+            
+            try:
+                self.render_queue.put_nowait(render_data)
+            except queue.Full:
+                # キューが満杯の場合は古いデータを破棄
+                try:
+                    self.render_queue.get_nowait()
+                    self.render_queue.put_nowait(render_data)
+                except:
+                    pass
+
+    def _start_render_worker(self):
+        """レンダーワーカーのエントリーポイント"""
+        self._render_worker()
+    
+    def _render_worker(self):
+        """別スレッドでレンダリング処理を実行"""
+        print("Render worker started")
+        while self.running:
+            try:
+                render_data = self.render_queue.get(timeout=1.0)
+                if render_data is None:  # 終了シグナル
+                    break
+                self._render_frame(render_data)
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"Render worker error: {e}")
+                import traceback
+                traceback.print_exc()
+        print("Render worker stopped")
+
 
     def _extract_frame_data(self, request):
         """フレームデータとメタデータを抽出"""
@@ -929,17 +1023,37 @@ class PeopleFlowManager:
         if not isinstance(self.active_people, list):
             print(f"track_people returned : {type(self.active_people)}")
 
-    def _render_frame(self, request, frame_height, frame_width, center_line_x, frame_id):
-        """フレームに描画処理を実行"""
-        with MappedArray(request, 'main') as m:
-            # 起動時の画像を一度だけ保存
-            if not self.image_saved:
-                self._handle_startup_image_save(m.array, center_line_x)
-                self.image_saved = True
-            self._draw_center_lines(m.array, center_line_x, frame_height)
-            self._draw_people_tracking(m.array)
-            self._draw_count_info(m.array, frame_id)
-            self._handle_webrtc_streaming(m.array)
+    def _render_frame(self, render_data):
+        """非同期でフレームに描画処理を実行"""
+        try:
+            # _render_frameの処理を非同期化
+            request         = render_data['request']
+            frame_height    = render_data['frame_height']
+            frame_width     = render_data['frame_width']
+            center_line_x   = render_data['center_line_x']
+            frame_id        = render_data['frame_id']
+            
+            with MappedArray(request, 'main') as m:
+                # 起動時の画像を一度だけ保存
+                if not render_data['image_saved'] and not self.image_saved:
+                    self._handle_startup_image_save(m.array, center_line_x)
+                    self.image_saved = True
+                    
+                # 描画
+                self._draw_center_lines(m.array, center_line_x, frame_height)
+                
+                # active_peopleのスナップショットを使用して描画
+                self._draw_people_tracking(m.array, render_data['active_people'])
+                
+                # カウント情報の描画（スナップショットを使用）
+                self._draw_count_info(m.array, frame_id, render_data['counter_snapshot'])
+                
+                # WebRTC配信（3フレームに1回配信）
+                if self.frame_skip_counter % 3 == 0:
+                    self._handle_webrtc_streaming(m.array)
+                    
+        except Exception as e:
+            print(f"Render error: {e}")
 
     def _handle_startup_image_save(self, array, center_line_x):
         """起動時の画像保存処理"""
@@ -963,9 +1077,9 @@ class PeopleFlowManager:
         cv2.line(array, (left_margin_x, 0), (left_margin_x, frame_height), (0, 128, 255), 2)
         cv2.line(array, (right_margin_x, 0), (right_margin_x, frame_height), (0, 128, 255), 2)
 
-    def _draw_people_tracking(self, array):
+    def _draw_people_tracking(self, array, active_people_snapshot):
         """人物の検出ボックスと軌跡を描画"""
-        for person in self.active_people:
+        for person in active_people_snapshot:
             color = self._get_person_color(person)
             self._draw_person_box(array, person, color)
             self._draw_person_trajectory(array, person, color)
@@ -999,14 +1113,12 @@ class PeopleFlowManager:
             for i in range(1, len(person.trajectory)):
                 cv2.line(array, person.trajectory[i-1], person.trajectory[i], color, 2)
 
-    def _draw_count_info(self, array, frame_id):
+    def _draw_count_info(self, array, frame_id, counter_snapshot):
         """カウント情報と時刻を描画"""
-        total_counts = self.counter.get_total_counts()
-        
         # カウント情報
-        cv2.putText(array, f"right_to_left: {total_counts['right_to_left']}", 
+        cv2.putText(array, f"right_to_left: {counter_snapshot['right_to_left']}", 
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        cv2.putText(array, f"left_to_right: {total_counts['left_to_right']}", 
+        cv2.putText(array, f"left_to_right: {counter_snapshot['left_to_right']}", 
                     (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 128, 0), 2)
         
         # 時刻とフレームID
@@ -1278,14 +1390,19 @@ async def main():
         await web_server(stop_event)
     except KeyboardInterrupt:
         print("[async main] Ctrl+Cキャッチ、停止イベントセット")
-        stop_event.set()
-        cam_thread.join()
-        print("[async main] Cameraスレッド終了を確認")
     finally:
-        print("[async main] メインスレッドの終了処理")
+        # 確実に停止処理を実行
+        stop_event.set()
+        print("[async main] カメラスレッドの終了を待機中...")
+        cam_thread.join(timeout=5.0)  # タイムアウトを設定
+        if cam_thread.is_alive():
+            print("[async main] 警告: カメラスレッドがタイムアウト内に終了しませんでした")
+        else:
+            print("[async main] カメラスレッド終了を確認")
+        print("[async main] メインスレッドの終了処理完了")
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        pass
+        print("プログラムを中断しました")
