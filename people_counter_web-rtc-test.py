@@ -1531,24 +1531,43 @@ def camera_main(stop_event, args, loop):
         except Exception as e:
             print(f"終了処理エラー: {e}")
 
+# グローバルなRTCPeerConnectionのセット
 pcs = set()
+
 async def offer(request):
+    """
+    WebRTCクライアントから"offer"を受け取り、"answer"を返すエンドポイント。
+    (シグナリング用: SDPのやりとり)
+    """
     print("OFFER HANDLER CALLED!")
+
+    # CORS(クロスオリジン)用のHTTPヘッダ - ブラウザ間連携で必要
     headers = {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': '*',
         'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
     }
     try:
+        # クライアントから送信されたJSONをパースし、SDP情報を取得
         params = await request.json()
         offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
+
+        # 新しいPeerConnectionを作成し、グローバルSetに追加(ガベージ回避)
         pc = RTCPeerConnection()
         pcs.add(pc)
+
+        # 映像ストリーム用トラック(カメラなど)をPeerConnectionへ追加
         camera_track = CameraTrack(frame_queue)
         pc.addTrack(camera_track)
+
+        # クライアントから送信されたOffer SDPをセット
         await pc.setRemoteDescription(offer)
+
+        # サーバー側で"Answer" SDPを生成し、自分へセット
         answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
+
+        # クライアントに"Answer"(SDPデータ)付きJSONを返す
         return web.Response(
             content_type="application/json",
             headers=headers,
@@ -1556,10 +1575,11 @@ async def offer(request):
                 {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
             ),
         )
+
     except Exception as e:
         import traceback
         print(traceback.format_exc())
-        # 失敗時もCORSつきエラーを返す
+        # 失敗時もCORSヘッダ付きでエラーを伝える(JSONでなく文字列で)
         return web.Response(
             status=500,
             content_type='text/plain',
@@ -1568,7 +1588,10 @@ async def offer(request):
         )
 
 async def options_handler(request):
-    # CORSプリフライトに応答
+    """
+    ブラウザからのCORSプリフライト(OPTIONS)リクエストの応答
+    /offer エンドポイントに対し、事前にCORS許可を返す必要がある
+    """
     headers = {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': '*',
@@ -1577,17 +1600,32 @@ async def options_handler(request):
     return web.Response(headers=headers)
 
 async def web_server(stop_event):
+    """
+    aiohttpを用いたHTTPS Webサーバ起動関数
+    stop_event.is_set()になるまでHTTPサーバ(シグナリングサーバ)を持続する
+    """
     app = web.Application()
+
+    # POST /offer へのリクエストルート追加（SDPシグナリング）
     app.router.add_post('/offer', offer)
+    # OPTIONS /offer へのリクエスト対応（CORSサポート）
     app.router.add_options('/offer', options_handler)  # 追加
+
+    # サーバ起動処理
     runner = web.AppRunner(app)
     await runner.setup()
+
+    # SSL証明書読み込み
     ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     ssl_context.load_cert_chain(certfile="cert.pem", keyfile="key.pem")
+
+    # HTTPSサーバを8443番ポートでListen
     site = web.TCPSite(runner, '0.0.0.0', 8443, ssl_context=ssl_context)
     await site.start()
     print("WebRTC signaling server started")
+
     try:
+        # stop_eventがsetされるまでサーバ維持
         while not stop_event.is_set():
             await asyncio.sleep(1)
         print("[web server] 停止イベントを受信。サーバー停止開始。")
