@@ -867,108 +867,192 @@ class PeopleFlowManager:
 
     def process_frame(self, request):
         """フレームごとの処理を行うコールバック関数"""
+        # フレームデータとメタデータの取得
+        frame, metadata, frame_id = self._extract_frame_data(request)
+        
+        # 検出処理
+        detections = self._get_detections(metadata)
+        
+        # 人物追跡の更新
+        frame_height, frame_width = frame.shape[:2]
+        center_line_x = frame_width // 2
+        self._update_tracking(detections, frame_id, center_line_x)
+        
+        # フレーム描画処理
+        self._render_frame(request, frame_height, frame_width, center_line_x, frame_id)
+        
+        # ライン横断チェックとカウント更新
+        self._process_line_crossings(center_line_x, frame)
+        
+        # 定期処理（ログ出力、データ保存、古いトラッキング削除）
+        self._handle_periodic_tasks()
+
+    def _extract_frame_data(self, request):
+        """フレームデータとメタデータを抽出"""
         with MappedArray(request, 'main') as m:
             frame = m.array.copy()
         # メタデータを取得
         metadata = request.get_metadata()
         # SensorTimestampをframe_idに利用
-        frame_id = metadata.get('SensorTimestamp')
+        frame_id = metadata.get('SensorTimestamp') if metadata else None
+        
+        return frame, metadata, frame_id
+
+    def _get_detections(self, metadata):
+        """検出処理を実行"""
         if metadata is None:
             # print("メタデータがNoneです") # デバッグ用
             # メタデータがない場合でも、既存のactive_peopleはタイムアウトで削除する必要があるため処理を進める
             # ただし検出処理はスキップ
-            detections = []
-        else:
-            # 検出処理
-            detections = Detection.parse_detections(metadata, self.parameters, self.intrinsics, self.camera.imx500, self.camera.picam2, )
+            return []
+        
+        # 検出処理
+        return Detection.parse_detections(
+            metadata, 
+            self.parameters, 
+            self.intrinsics, 
+            self.camera.imx500, 
+            self.camera.picam2
+        )
 
-        # 人物追跡を更新
-        frame_height, frame_width = frame.shape[:2]
-        center_line_x = frame_width // 2
-        self.active_people, self.lost_people = self._track_people(self.active_people, self.lost_people, detections, frame_id, center_line_x)
+    def _update_tracking(self, detections, frame_id, center_line_x):
+        """人物追跡を更新"""
+        self.active_people, self.lost_people = self._track_people(
+            self.active_people, 
+            self.lost_people, 
+            detections, 
+            frame_id, 
+            center_line_x
+        )
+        
+        # デバッグ用チェック
         if not isinstance(self.active_people, list):
             print(f"track_people returned : {type(self.active_people)}")
 
+    def _render_frame(self, request, frame_height, frame_width, center_line_x, frame_id):
+        """フレームに描画処理を実行"""
         with MappedArray(request, 'main') as m:
             # 起動時の画像を一度だけ保存
             if not self.image_saved:
-                modules.save_image_at_startup(m.array, center_line_x, self.directoryInfo.date_dir, self.directoryInfo.output_prefix)
+                self._handle_startup_image_save(m.array, center_line_x)
                 self.image_saved = True
+            self._draw_center_lines(m.array, center_line_x, frame_height)
+            self._draw_people_tracking(m.array)
+            self._draw_count_info(m.array, frame_id)
+            self._handle_webrtc_streaming(m.array)
 
-            # 中央ラインを描画
-            cv2.line(m.array, (center_line_x, 0), (center_line_x, frame_height), 
-                    (255, 255, 0), 2)
+    def _handle_startup_image_save(self, array, center_line_x):
+        """起動時の画像保存処理"""
+        modules.save_image_at_startup(
+            array, 
+            center_line_x, 
+            self.directoryInfo.date_dir, 
+            self.directoryInfo.output_prefix
+        )
 
-            # CENTER_LINE_MARGINを描画
-            center_line_margin_px = self.parameters.center_line_margin_px
-            cv2.line(m.array, (center_line_x - center_line_margin_px, 0), (center_line_x - center_line_margin_px, frame_height), 
-                    (0, 128, 255), 2)
-            cv2.line(m.array, (center_line_x + center_line_margin_px, 0), (center_line_x + center_line_margin_px, frame_height), 
-                    (0, 128, 255), 2)
+    def _draw_center_lines(self, array, center_line_x, frame_height):
+        """中央ラインとマージンラインを描画"""
+        # 中央ライン
+        cv2.line(array, (center_line_x, 0), (center_line_x, frame_height), (255, 255, 0), 2)
+        
+        # CENTER_LINE_MARGINを描画
+        margin = self.parameters.center_line_margin_px
+        left_margin_x = center_line_x - margin
+        right_margin_x = center_line_x + margin
+        
+        cv2.line(array, (left_margin_x, 0), (left_margin_x, frame_height), (0, 128, 255), 2)
+        cv2.line(array, (right_margin_x, 0), (right_margin_x, frame_height), (0, 128, 255), 2)
 
-            # 人物の検出ボックスと軌跡を描画
-            for person in self.active_people:
-                x, y, w, h = person.box
-                
-                # 人物の方向によって色を変える
-                if person.crossed_direction == "left_to_right":
-                    color = (0, 128, 0)  # 緑: 左から右
-                elif person.crossed_direction == "right_to_left":
-                    color = (0, 0, 255)  # 赤: 右から左
-                else:
-                    color = (255, 255, 255)  # 白: まだカウントされていない
-                
-                # 検出ボックスを描画
-                cv2.rectangle(m.array, (x, y), (x + w, y + h), color, 2)
-                
-                # ID表示
-                cv2.putText(m.array, f"ID: {person.id}", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                # ボックスの高さ表示
-                cv2.putText(m.array, f"H: {int(h)}", (x, y + h + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                # 軌跡を描画
-                if len(person.trajectory) > 1:
-                    for i in range(1, len(person.trajectory)):
-                        cv2.line(m.array, person.trajectory[i-1], person.trajectory[i], color, 2)
-            
-            # カウント情報を表示
-            total_counts = self.counter.get_total_counts()
-            cv2.putText(m.array, f"right_to_left: {total_counts['right_to_left']}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            cv2.putText(m.array, f"left_to_right: {total_counts['left_to_right']}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 128, 0), 2)
-            # 時刻とフレームIDを表示
-            text_str = f"FrameID: {frame_id} / {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            cv2.putText(m.array, text_str, (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+    def _draw_people_tracking(self, array):
+        """人物の検出ボックスと軌跡を描画"""
+        for person in self.active_people:
+            color = self._get_person_color(person)
+            self._draw_person_box(array, person, color)
+            self._draw_person_trajectory(array, person, color)
 
-            # ============ webRTC配信 ============
-            frame = m.array.copy()
-            # BGRA→BGR(もしくはRGB→BGR, フォーマット次第で調整)
-            if frame.shape[2] == 4:
-                frame_to_send = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-            else:
-                frame_to_send = frame.copy()
+    def _get_person_color(self, person):
+        """人物の方向に基づいて色を決定"""
+        color_map = {
+            "left_to_right": (0, 128, 0),    # 緑
+            "right_to_left": (0, 0, 255),    # 赤
+        }
+        return color_map.get(person.crossed_direction, (255, 255, 255))  # デフォルト: 白
 
-            # 解像度変更して処理負荷を軽減したいとき
-            original_height, original_width = frame_to_send.shape[0], frame_to_send.shape[1]
-            # 例えば、幅を 480、高さをアスペクト比を維持して計算
-            # target_width = 480
-            target_width = original_width
-            target_height = int(original_height * (target_width / original_width))
-            
-            # 必ず偶数になるように調整 (YUV420p向け)
-            target_width = target_width // 2 * 2
-            target_height = target_height // 2 * 2
+    def _draw_person_box(self, array, person, color):
+        """人物の検出ボックスと情報を描画"""
+        x, y, w, h = person.box
+        
+        # 検出ボックス
+        cv2.rectangle(array, (x, y), (x + w, y + h), color, 2)
+        
+        # ID表示
+        cv2.putText(array, f"ID: {person.id}", (x, y - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        # ボックスの高さ表示
+        cv2.putText(array, f"H: {int(h)}", (x, y + h + 15), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-            if original_width != target_width or original_height != target_height:
-                frame_to_send = cv2.resize(frame_to_send, (target_width, target_height), interpolation=cv2.INTER_AREA)
+    def _draw_person_trajectory(self, array, person, color):
+        """人物の軌跡を描画"""
+        if len(person.trajectory) > 1:
+            for i in range(1, len(person.trajectory)):
+                cv2.line(array, person.trajectory[i-1], person.trajectory[i], color, 2)
 
-            # キューに入れる
-            if not frame_queue.full():
-                try:
-                    frame_queue.put_nowait(frame_to_send)
-                except Exception as e:
-                    print("Frame put failed:", e)
-            # ===================================
+    def _draw_count_info(self, array, frame_id):
+        """カウント情報と時刻を描画"""
+        total_counts = self.counter.get_total_counts()
+        
+        # カウント情報
+        cv2.putText(array, f"right_to_left: {total_counts['right_to_left']}", 
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        cv2.putText(array, f"left_to_right: {total_counts['left_to_right']}", 
+                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 128, 0), 2)
+        
+        # 時刻とフレームID
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        text_str = f"FrameID: {frame_id} / {timestamp}"
+        cv2.putText(array, text_str, (10, 90), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
-        # ラインを横切った人をカウント
+    def _handle_webrtc_streaming(self, array):
+        """WebRTC配信用のフレーム処理"""
+        frame_to_send = self._prepare_streaming_frame(array)
+        
+        if not frame_queue.full():
+            try:
+                frame_queue.put_nowait(frame_to_send)
+            except Exception as e:
+                print(f"Frame put failed: {e}")
+
+    def _prepare_streaming_frame(self, array):
+        """配信用フレームの準備"""
+        # カラーフォーマット変換
+        if array.shape[2] == 4:
+            frame = cv2.cvtColor(array, cv2.COLOR_BGRA2BGR)
+        else:
+            frame = array.copy()
+        
+        # 解像度調整（必要に応じて）
+        return self._resize_frame_for_streaming(frame)
+
+    def _resize_frame_for_streaming(self, frame):
+        """配信用にフレームをリサイズ"""
+        original_height, original_width = frame.shape[:2]
+        target_width = original_width  # 必要に応じて変更
+        target_height = int(original_height * (target_width / original_width))
+        
+        # 偶数に調整（YUV420p向け）
+        target_width = (target_width // 2) * 2
+        target_height = (target_height // 2) * 2
+        
+        if original_width != target_width or original_height != target_height:
+            return cv2.resize(frame, (target_width, target_height), interpolation=cv2.INTER_AREA)
+        
+        return frame
+
+    def _process_line_crossings(self, center_line_x, frame):
+        """ライン横断チェックとカウント更新"""
         for person in self.active_people:
             # 少なくとも2フレーム以上の軌跡がある人物が対象
             if len(person.trajectory) >= 2:
@@ -976,24 +1060,49 @@ class PeopleFlowManager:
                 if direction:
                     self.counter.update(direction)
 
-        # --- アクティブ人物リスト整理 ---
-        # 古いトラッキング対象を削除 (last_seen が TRACKING_TIMEOUT を超えたもの)
+    def _handle_periodic_tasks(self):
+        """定期処理（ログ出力、データ保存、古いトラッキング削除）"""
         current_time = time.time()
-        self.active_people = [p for p in self.active_people if current_time - p.last_seen < self.parameters.tracking_timeout]
+        
+        # 古いトラッキング対象を削除 (last_seen が TRACKING_TIMEOUT を超えたもの)
+        self._cleanup_old_tracking(current_time)
+        
+        # 定期ログ出力
+        self._handle_periodic_logging(current_time)
+        
+        # データ保存
+        self._handle_periodic_saving(current_time)
 
-        # 定期的なログ出力
+    def _cleanup_old_tracking(self, current_time):
+        """古いトラッキング対象を削除"""
+        self.active_people = [
+            p for p in self.active_people 
+            if current_time - p.last_seen < self.parameters.tracking_timeout
+        ]
+
+    def _handle_periodic_logging(self, current_time):
+        """定期的なログ出力"""
         if current_time - self.last_log_time >= self.parameters.log_interval:
             self.last_log_time = current_time
-            total_counts = self.counter.get_total_counts()
-            elapsed = int(current_time - self.counter.last_save_time)
-            remaining = max(0, int(self.parameters.counting_interval - elapsed)) # 負にならないように
-            print(f"--- Status Update ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) ---")
-            print(f"Active tracking: {len(self.active_people)} people")
-            print(f"Counts - Period (R->L: {self.counter.right_to_left}, L->R: {self.counter.left_to_right})")
-            print(f"Counts - Total (R->L: {total_counts['right_to_left']}, L->R: {total_counts['left_to_right']})")
-            print(f"Next save in: {remaining} seconds")
-            print(f"--------------------------------------------------")
+            self._log_status_update(current_time)
 
+    def _log_status_update(self, current_time):
+        """ステータス更新ログを出力"""
+        total_counts = self.counter.get_total_counts()
+        elapsed = int(current_time - self.counter.last_save_time)
+        remaining = max(0, int(self.parameters.counting_interval - elapsed))
+        
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        print(f"--- Status Update ({timestamp}) ---")
+        print(f"Active tracking: {len(self.active_people)} people")
+        print(f"Counts - Period (R->L: {self.counter.right_to_left}, L->R: {self.counter.left_to_right})")
+        print(f"Counts - Total (R->L: {total_counts['right_to_left']}, L->R: {total_counts['left_to_right']})")
+        print(f"Next save in: {remaining} seconds")
+        print("--------------------------------------------------")
+
+    def _handle_periodic_saving(self, current_time):
+        """定期的なデータ保存"""
         # 指定間隔ごとにJSONファイルに保存
         if current_time - self.counter.last_save_time >= self.parameters.counting_interval:
             self.counter.save_to_json()
