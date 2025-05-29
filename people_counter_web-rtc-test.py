@@ -54,12 +54,12 @@ class Parameter:
         self.center_line_margin_px      = self.config.get('CENTER_LINE_MARGIN_PX')              # ライン中心から±何ピクセルを「ライン近傍」とみなすかの閾値（ピクセル数）
         self.recovery_distance_px       = self.config.get('RECOVERY_DISTANCE_PX')               # 過去の人物と新しい検出の中心座標（x）の距離が 何ピクセル以内なら「同一人物が復帰した」とみなすかの閾値
         self.tracking_timeout           = self.config.get('TRACKING_TIMEOUT')                   # 人物を追跡し続ける最大時間（秒）
-        self.counting_interval          = self.config.get('COUNTING_INTERVAL')                  # カウント間隔（秒）
         self.active_timeout_sec         = self.config.get('ACTIVE_TIMEOUT_SEC')                 # lost_people保持猶予(秒)
         self.direction_mismatch_penalty = self.config.get('DIRECTION_MISMATCH_PENALTY')         # 逆方向へのマッチに与える追加コスト
         self.max_acceptable_cost        = self.config.get('MAX_ACCEPTABLE_COST')                # 最大許容コスト
         self.min_box_height             = self.config.get('MIN_BOX_HEIGHT')                     # 人物ボックスの高さフィルタ。これより小さいBoxは排除(ピクセル)
         self.max_box_height             = self.config.get('MAX_BOX_HEIGHT')                     # 人物ボックスの高さフィルタ。これより大きいBoxは排除(ピクセル)
+        self.log_output_interval_sec    = self.config.get('LOG_OUTPUT_INTERVAL_SEC')            # ログ出力間隔（秒）
         self.output_dir                 = self.config.get('OUTPUT_DIR', 'people_count_data')    # ログデータを保存するディレクトリ名
         self.debug_mode                 = str(self.config.get('DEBUG_MODE', 'False')).lower() == 'true'
         self.debug_images_subdir_name   = self.config.get('DEBUG_IMAGES_SUBDIR_NAME', 'debug_images')
@@ -786,7 +786,6 @@ class PeopleFlowManager:
                         # ---- 復帰判定の各種条件 ----
                         # lost_person（見失った人）の中心座標取得
                         lost_cx, _ = lost_person.get_center()
-                        # detection（新検出）の中心座標取得
                         det_cx, _ = detection.get_center()
                         # Kalman Filterの推定速度
                         avg_dx, avg_dy = lost_person.kf.x[2], lost_person.kf.x[3]
@@ -1220,7 +1219,7 @@ class PeopleFlowManager:
         """ステータス更新ログを出力"""
         total_counts = self.counter.get_total_counts()
         elapsed = int(current_time - self.counter.last_save_time)
-        remaining = max(0, int(self.parameters.counting_interval - elapsed))
+        remaining = max(0, int(self.parameters.log_output_interval_sec - elapsed))
         
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
@@ -1234,7 +1233,7 @@ class PeopleFlowManager:
     def _handle_periodic_saving(self, current_time):
         """定期的なデータ保存"""
         # 指定間隔ごとにJSONファイルに保存
-        if current_time - self.counter.last_save_time >= self.parameters.counting_interval:
+        if current_time - self.counter.last_save_time >= self.parameters.log_output_interval_sec:
             self.counter.save_to_json()
 
 # ======= メイン処理 =======
@@ -1309,7 +1308,7 @@ def camera_main(stop_event, args, loop):
     manager = PeopleFlowManager(config, loop, counter, directoryInfo, intrinsics, camera, parameters)
     picam2.pre_callback = manager.process_frame
 
-    print(f"人流カウント開始 - {parameters.counting_interval}秒ごとにデータを保存します")
+    print(f"人流カウント開始 - {parameters.log_output_interval_sec}秒ごとにデータを保存します")
     print(f"ログは{parameters.log_interval}秒ごとに出力されます")
     print("Ctrl+Cで終了します")
     
