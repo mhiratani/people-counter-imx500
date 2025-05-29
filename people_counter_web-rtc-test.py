@@ -852,49 +852,94 @@ class PeopleFlowManager:
         return updated_lost_people
 
     def _add_newly_lost_people(self, active_people, lost_people, used_people, current_time):
-        """新たにロストした人物をlost_peopleに追加"""
-        updated_lost_people = lost_people.copy()
-        
+        """
+        新しくロストした人物をlost_peopleリストに追加する処理。
+
+        active_people: 現フレームで追跡中の人物リスト
+        lost_people:      既にロスト状態の人物リスト
+        used_people:      今回対応済のactive_peopleのインデックス集合
+        current_time:     現フレームのタイムスタンプ
+
+        - active_peopleのうちまだused_peopleに含まれていないものをロストとして扱い（追跡見失い）、
+        lost_peopleリストに追加する。
+        - 追跡を失った瞬間の時刻・バウンディングボックス情報も記録する。
+        """
+        updated_lost_people = lost_people.copy()  # 元のリストをコピーして編集
+
         for i, person in enumerate(active_people):
             if i not in used_people:
-                person.lost_start_time = current_time
-                person.lost_last_box = person.box
-                updated_lost_people.append(person)
-        
+                # この人物は今回新たにロストとみなす
+                person.lost_start_time = current_time  # ロスト開始時間を記録
+                person.lost_last_box = person.box      # ロスト直前のboxを記録
+                updated_lost_people.append(person)     # ロストリストに追加
+
         return updated_lost_people
 
+
+
     def _process_recovery(self, lost_people, detections, used_detections, center_line_x, current_time):
-        """ロスト人物の復帰処理"""
-        recovered_people = []
-        additional_used_detections = set()
-        remaining_lost_people = []
-        
+        """
+        ロスト中人物の復帰を試行する処理。
+
+        lost_people:      ロスト中の人物リスト
+        detections:       現フレームでの検出結果（たとえば物体認識アルゴリズムの出力）
+        used_detections:  既に消費済みのdetectionインデックス集合
+        center_line_x:    画面中央位置(人物復帰判定などに使う)
+        current_time:     現フレームの時刻
+
+        - 各ロスト中人物ごとに"_attempt_recovery"を呼び、復帰可能か判定
+        - 復帰できた場合はrecovered_peopleとして結果に加える
+        - 復帰に使ったdetection indexはadditional_used_detectionsに記録
+        - 復帰できなかった人はremaining_lost_peopleに格納
+        """
+        recovered_people = []            # 復帰できた人物
+        additional_used_detections = set()  # 今回新たに消費したdetection index
+        remaining_lost_people = []       # まだ復帰できない人物
+
         for lost_person in lost_people:
             recovery_result = self._attempt_recovery(
                 lost_person, detections, used_detections, center_line_x, current_time
             )
-            
+
             if recovery_result.recovered:
                 recovered_people.append(lost_person)
                 additional_used_detections.add(recovery_result.detection_index)
             else:
                 remaining_lost_people.append(lost_person)
-        
+
         return recovered_people, remaining_lost_people, additional_used_detections
 
     def _attempt_recovery(self, lost_person, detections, used_detections, center_line_x, current_time):
-        """個別のロスト人物の復帰を試行"""
+        """
+        個々のロスト中人物の復帰を試みる。
+
+        lost_person:       対象のロスト人物オブジェクト
+        detections:        検出結果リスト
+        used_detections:   既に消費済みのdetection index集合
+        center_line_x:     画面中央X位置など
+        current_time:      現在時刻
+
+        - crossed_directionが設定済み(すでに退場した)場合は復帰しない
+        - 使われていないdetectionそれぞれに対し、復帰可能か判定
+        - 復帰条件を満たしたdetectionが見つかればlost_personの状態を更新し、復帰結果として返す
+
+        戻り値:
+            self.RecoveryResult(recovered:bool, detection_index:int or None)
+        """
         if lost_person.crossed_direction is not None:
+            # すでに出入りが確定した人物は復帰対象外
             return self.RecoveryResult(False, None)
-        
+
         for j, detection in enumerate(detections):
             if j in used_detections:
-                continue
-            
+                continue  # 既に他人物に使われた検出はスキップ
+
             if self._can_recover(lost_person, detection, center_line_x, current_time):
-                lost_person.update(detection.box)
+                # 復帰条件判定に合格
+                lost_person.update(detection.box)  # ボックス情報更新など
                 return self.RecoveryResult(True, j)
-        
+
+        # 全検出で復帰不可
         return self.RecoveryResult(False, None)
 
     def _can_recover(self, lost_person, detection, center_line_x, current_time):
