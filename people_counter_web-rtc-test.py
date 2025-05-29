@@ -555,8 +555,7 @@ class PeopleFlowManager:
         
         # スレッドを起動
         self.render_thread = threading.Thread(
-            target=self._render_worker_wrapper,
-            name="RenderWorker",
+            target=self._start_render_worker, 
             daemon=True
         )
         self.render_thread.start()
