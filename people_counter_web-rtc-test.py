@@ -552,12 +552,12 @@ class PeopleFlowManager:
         self.render_queue = queue.Queue(maxsize=5)
         self.frame_skip_counter = 0
         self.render_skip_rate = 3
-        
+
         # スレッドを起動
         self.render_thread = threading.Thread(
             target=self._start_render_worker, 
             daemon=True
-        )
+            )
         self.render_thread.start()
         print("PeopleFlowManager initialized successfully")
     
@@ -903,15 +903,34 @@ class PeopleFlowManager:
         """フレームごとの処理を行うコールバック関数"""
         # フレームデータとメタデータの取得
         frame, metadata, frame_id = self._extract_frame_data(request)
-        
+        start_time = time.time()
         # 検出処理
+        detection_start = time.time()
         detections = self._get_detections(metadata)
-        
+        detection_time = time.time() - detection_start
+    
         # 人物追跡の更新
         frame_height, frame_width = frame.shape[:2]
         center_line_x = frame_width // 2
-        self._update_tracking(detections, frame_id, center_line_x)
         
+        tracking_start = time.time()
+        self._update_tracking(detections, frame_id, center_line_x)
+        tracking_time = time.time() - tracking_start
+
+        # フレーム落ち判定（例：33ms = 30FPS基準）
+        frame_threshold = 0.033  # 30FPSの場合
+        total_time = time.time() - start_time
+        
+        if detection_time > frame_threshold:
+            print(f"[WARNING] Detection処理でフレーム落ち発生: {detection_time:.3f}s (frame_id: {frame_id})")
+        
+        if tracking_time > frame_threshold:
+            print(f"[WARNING] Tracking処理でフレーム落ち発生: {tracking_time:.3f}s (frame_id: {frame_id})")
+        
+        if total_time > frame_threshold:
+            print(f"[WARNING] 全体処理でフレーム落ち発生: {total_time:.3f}s (frame_id: {frame_id})")
+        
+
         # レンダリング用データをキューに追加（非ブロッキング）
         self._queue_render_data(request, frame_height, frame_width, center_line_x, frame_id)
 
