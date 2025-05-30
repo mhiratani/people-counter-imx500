@@ -833,6 +833,8 @@ class PeopleFlowManager:
                 matched_people.append(person)           # マッチした人物をリストに追加
                 used_people.add(person_idx)             # 使用済み人物インデックスを記録
                 used_detections.add(detection_idx)      # 使用済み検出結果インデックスを記録
+            else:
+                print(f"costオーバー:{cost}")
         
         return self.MatchingResult(matched_people, used_detections, used_people)
 
@@ -878,6 +880,7 @@ class PeopleFlowManager:
         for i, person in enumerate(active_people):
             if i not in used_people:
                 # この人物は今回新たにロストとみなす
+                print(f"今回新たにロスト:{person.box}")
                 person.lost_start_time = current_time  # ロスト開始時間を記録
                 person.lost_last_box = person.box      # ロスト直前のboxを記録
                 updated_lost_people.append(person)     # ロストリストに追加
@@ -891,7 +894,7 @@ class PeopleFlowManager:
         ロスト中人物の復帰を試行する処理。
 
         lost_people:      ロスト中の人物リスト
-        detections:       現フレームでの検出結果（たとえば物体認識アルゴリズムの出力）
+        detections:       現フレームでの検出結果
         used_detections:  既に消費済みのdetectionインデックス集合
         center_line_x:    画面中央位置(人物復帰判定などに使う)
         current_time:     現フレームの時刻
@@ -946,6 +949,7 @@ class PeopleFlowManager:
             if self._can_recover(lost_person, detection, center_line_x, current_time):
                 # 復帰条件判定に合格
                 lost_person.update(detection.box)  # ボックス情報更新など
+                print(f"recovered:{lost_person.id}")
                 return self.RecoveryResult(True, j)
 
         # 全検出で復帰不可
