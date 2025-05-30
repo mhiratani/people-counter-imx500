@@ -768,6 +768,14 @@ class PeopleFlowManager:
 
     def _calculate_direction_penalty(self, person, detection_center):
         """方向の一貫性に基づくペナルティを計算"""
+
+        # 検出座標の「揺れ」「ノイズ」で頻繁にペナルティが入ってしまうための小さな動きを許容する
+        min_movement = 20  # ピクセル単位で閾値
+        delta_x = detection_center[0] - person.trajectory[-1][0]
+        if abs(delta_x) < min_movement:
+            print("小さな動きを許容")
+            return 0
+
         avg_motion = person.get_avg_motion()
         avg_motion_x = avg_motion[0]
         if avg_motion_x == 0 or len(person.trajectory) == 0:
@@ -776,6 +784,7 @@ class PeopleFlowManager:
         intended_dir = np.sign(avg_motion_x)
         actual_dir = np.sign(detection_center[0] - person.trajectory[-1][0])
         if intended_dir != 0 and actual_dir != 0 and intended_dir != actual_dir:
+            print("逆方向へのマッチにペナルティを追加")
             return self.parameters.direction_mismatch_penalty   # 逆方向へのマッチにペナルティを追加
         
         return 0
