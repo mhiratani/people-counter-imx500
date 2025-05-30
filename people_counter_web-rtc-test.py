@@ -1362,14 +1362,20 @@ class PeopleFlowManager:
         x, y, w, h = person.box
         
         # 検出ボックス
-        cv2.rectangle(array, (x, y), (x + w, y + h), color, 2)
+        cv2.rectangle(
+            array,
+            (int(x), int(y)),
+            (int(x + w), int(y + h)),
+            color,
+            2
+        )
         
         # ID表示
-        cv2.putText(array, f"ID: {person.id}", (x, y - 10), 
+        cv2.putText(array, f"ID: {person.id}", (int(x), int(y - 10)), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
         # ボックスの高さ表示
-        cv2.putText(array, f"H: {int(h)}", (x, y + h + 15), 
+        cv2.putText(array, f"H: {int(h)}", (int(x), int(y + h + 15)), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
     def _draw_person_trajectory(self, array, person, color):
