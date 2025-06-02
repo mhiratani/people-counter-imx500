@@ -773,7 +773,7 @@ class PeopleFlowManager:
         min_movement = 20  # ピクセル単位で閾値
         delta_x = detection_center[0] - person.trajectory[-1][0]
         if abs(delta_x) < min_movement:
-            print("小さな動きを許容")
+            # print("小さな動きを許容")
             return 0
 
         avg_motion = person.get_avg_motion()
@@ -784,7 +784,7 @@ class PeopleFlowManager:
         intended_dir = np.sign(avg_motion_x)
         actual_dir = np.sign(detection_center[0] - person.trajectory[-1][0])
         if intended_dir != 0 and actual_dir != 0 and intended_dir != actual_dir:
-            print("逆方向へのマッチにペナルティを追加")
+            # print("逆方向へのマッチにペナルティを追加")
             return self.parameters.direction_mismatch_penalty   # 逆方向へのマッチにペナルティを追加
         
         return 0
