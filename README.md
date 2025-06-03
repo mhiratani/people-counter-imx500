@@ -206,7 +206,7 @@ python people_count_service.py
 1. サービスファイルの作成
 
 ```bash
-sudo vim /etc/systemd/system/people-counter-non-gui.service
+sudo vim /etc/systemd/system/people-counter.service
 ```
 
 以下の内容を追加（ユーザー名とパスは環境に合わせて変更）:
@@ -219,12 +219,12 @@ After=network.target
 [Service]
 User=change_here_user_name
 WorkingDirectory=/home/change_here_user_name/people_counter_imx500
-ExecStart=/home/change_here_user_name/people_counter_imx500/venv/bin/python /home/change_here_user_name/people_counter_imx500/people_counter_non_gui.py
+ExecStart=/home/change_here_user_name/people_counter_imx500/venv/bin/python /home/change_here_user_name/people_counter_imx500/people_counter.py
 Restart=on-failure
 RestartSec=10
 StandardOutput=syslog
 StandardError=syslog
-SyslogIdentifier=people-counter-non-gui
+SyslogIdentifier=people-counter
 
 [Install]
 WantedBy=multi-user.target
@@ -234,7 +234,7 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl disable people-counter-non-gui  # 自動起動を無効化
+sudo systemctl disable people-counter  # 自動起動を無効化
 ```
 
 3. cronによるスケジュール設定
@@ -247,17 +247,17 @@ crontab -e
 
 ```
 # 平日（月〜金）の朝8時に開始、夜10時に停止
-0 8 * * 1-5 sudo systemctl start people-counter-non-gui
-0 22 * * 1-5 sudo systemctl stop people-counter-non-gui
+0 8 * * 1-5 sudo systemctl start people-counter
+0 22 * * 1-5 sudo systemctl stop people-counter
 
 # 土曜日は朝9時から夜9時まで
-0 9 * * 6 sudo systemctl start people-counter-non-gui
-0 21 * * 6 sudo systemctl stop people-counter-non-gui
+0 9 * * 6 sudo systemctl start people-counter
+0 21 * * 6 sudo systemctl stop people-counter
 ```
 
 ## カスタマイズ
 
-`people_counter_non_gui.py`内の以下のパラメータを調整できます:
+`people_counter.py`内の以下のパラメータを調整できます:
 
 - `DETECTION_THRESHOLD`: 検出信頼度の閾値（デフォルト: 0.5）
 - `MAX_TRACKING_DISTANCE`: 同一人物と判定する最大距離（ピクセル単位）
@@ -296,7 +296,7 @@ sudo apt install --reinstall python3-picamera2 imx500-all
 
 ```bash
 # エラーログの確認
-sudo journalctl -u people-counter-non-gui -n 50
+sudo journalctl -u people-counter -n 50
 
 # cronログの確認
 grep CRON /var/log/syslog
@@ -320,10 +320,10 @@ source venv/bin/activate
 python test_imx500.py
 
 # サービス状態確認
-sudo systemctl status people-counter-non-gui
+sudo systemctl status people-counter
 
 # サービスログの確認
-journalctl -u people-counter-non-gui.service -n 20
+journalctl -u people-counter.service -n 20
 ```
 
 ## Note
