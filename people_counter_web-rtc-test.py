@@ -58,6 +58,7 @@ class Parameter:
         self.tracking_timeout           = self.config.get('TRACKING_TIMEOUT')                   # 人物を追跡し続ける最大時間（秒）
         self.active_timeout_sec         = self.config.get('ACTIVE_TIMEOUT_SEC')                 # lost_people保持猶予(秒)
         self.distance_cost_normalize_px = self.config.get('DISTANCE_COST_NORMALIZE_PX')         # 距離正規化用(px)距離をこの値で割った値をコストとする
+        self.direction_stability_margin_px = self.config.get('DIRECTION_STABILITY_MARGIN_PX')   # 検出座標の「揺れ」「ノイズ」で頻繁に逆方向へのマッチに与える追加コストが入ってしまうため指定した範囲(px)を許容する
         self.direction_mismatch_penalty = self.config.get('DIRECTION_MISMATCH_PENALTY')         # 逆方向へのマッチに与える追加コスト
         self.max_acceptable_cost        = self.config.get('MAX_ACCEPTABLE_COST')                # 最大許容コスト
         self.min_box_height             = self.config.get('MIN_BOX_HEIGHT')                     # 人物ボックスの高さフィルタ。これより小さいBoxは排除(ピクセル)
@@ -771,10 +772,9 @@ class PeopleFlowManager:
     def _calculate_direction_penalty(self, person, detection_center):
         """方向の一貫性に基づくペナルティを計算"""
 
-        # 検出座標の「揺れ」「ノイズ」で頻繁にペナルティが入ってしまうための小さな動きを許容する
-        min_movement = 20  # ピクセル単位で閾値
         delta_x = detection_center[0] - person.trajectory[-1][0]
-        if abs(delta_x) < min_movement:
+        # 検出座標の「揺れ」「ノイズ」で頻繁にペナルティが入ってしまうための小さな動きを許容する
+        if abs(delta_x) < self.parameters.direction_stability_margin_px:
             # print("小さな動きを許容")
             return 0
 

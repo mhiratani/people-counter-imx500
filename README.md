@@ -136,6 +136,7 @@ vim config.json
 # TRACKING_TIMEOUT 人物を追跡し続ける最大時間（秒）
 # COUNTING_INTERVAL カウントデータを保存する間隔（秒）
 # ACTIVE_TIMEOUT_SEC  lost_people保持猶予（秒）
+# DIRECTION_STABILITY_MARGIN_PX 検出座標の「揺れ」「ノイズ」で頻繁に逆方向へのマッチに与える追加コストが入ってしまうため指定した範囲(px)を許容する
 # DIRECTION_MISMATCH_PENALTY   逆方向へのマッチに与える追加コスト
 # MAX_ACCEPTABLE_COST   最大許容コスト
 # MIN_BOX_HEIGHT 人物ボックスの高さフィルタ。これより小さいBoxは排除(ピクセル)
