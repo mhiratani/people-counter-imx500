@@ -752,6 +752,8 @@ class PeopleFlowManager:
         # --- 距離・IoU計算 ---
         # 【距離】予測中心点と検出中心点とのユークリッド距離（ピクセル単位）
         distance = self._calculate_euclidean_distance(predicted_center, detection_center)
+        # DISTANCE_COST_NORMALIZE_PX設定参考要デバック出力
+        # print(f"【距離】予測中心点と検出中心点とのユークリッド距離:{distance}")
         # 【IoU】予測ボックスと検出boxのIoU（重なり率：0~1）
         iou = self._calculate_iou(predicted_box, detection_box)
         # --- 総合コストの定義 ---
