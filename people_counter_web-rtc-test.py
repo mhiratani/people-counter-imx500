@@ -65,8 +65,6 @@ class Parameter:
         self.max_box_height             = self.config.get('MAX_BOX_HEIGHT')                     # 人物ボックスの高さフィルタ。これより大きいBoxは排除(ピクセル)
         self.log_output_interval_sec    = self.config.get('LOG_OUTPUT_INTERVAL_SEC')            # ログ出力間隔（秒）
         self.output_dir                 = self.config.get('OUTPUT_DIR', 'people_count_data')    # ログデータを保存するディレクトリ名
-        self.debug_mode                 = str(self.config.get('DEBUG_MODE', 'False')).lower() == 'true'
-        self.debug_images_subdir_name   = self.config.get('DEBUG_IMAGES_SUBDIR_NAME', 'debug_images')
         self.log_interval               = 10
 
     def _load_config(self, path):
@@ -129,20 +127,15 @@ class CameraTrack(VideoStreamTrack):
             return video_frame
 
 class DirectoryInfo:
-    def __init__(self, output_dir, output_prefix, debug_images_subdir_name):
+    def __init__(self, output_dir, output_prefix):
         self.output_dir = output_dir
         self.output_prefix = output_prefix
         self.date_dir = os.path.join(output_dir, datetime.now().strftime("%Y-%m-%d"))
-        self.debug_images_dir = os.path.join(output_dir, debug_images_subdir_name)
 
-    def makedir(self, debug_mode):
+    def makedir(self):
     # 出力ディレクトリの作成
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs(self.date_dir, exist_ok=True)
-        # デバッグディレクトリの作成
-        if debug_mode:
-            os.makedirs(self.debug_images_dir, exist_ok=True)
-            print(f"デバッグモード有効: 画像を {self.debug_images_dir} に保存")
 
 class Detection:
     """
@@ -1147,18 +1140,11 @@ class PeopleFlowManager:
                 # ラインをどちら方向にまたいだか判定
                 if prev_x < center_line_x:
                     person.crossed_direction = "left_to_right"
-                    # デバッグモードで画像を保存
-                    if self.parameters.debug_mode and frame is not None:
-                        modules.save_debug_image(frame, person, center_line_x, "left_to_right", self.directoryInfo.debug_images_dir, self.directoryInfo.output_prefix)
-
                     return "left_to_right"
+                
                 # 右→左: 中央線を以上→未満で通過
                 else:
                     person.crossed_direction = "right_to_left"
-                    # デバッグモードで画像を保存
-                    if self.parameters.debug_mode and frame is not None:
-                        modules.save_debug_image(frame, person, center_line_x, "right_to_left", self.directoryInfo.debug_images_dir, self.directoryInfo.output_prefix)
-
                     return "right_to_left"
 
     def process_frame(self, request):
@@ -1569,8 +1555,8 @@ def camera_main(stop_event, args, loop):
 
     # 各種パラメータクラス初期化
     camera = Camera(picam2, imx500)
-    directoryInfo = DirectoryInfo(parameters.output_dir, parameters.camera_name, parameters.debug_images_subdir_name)
-    directoryInfo.makedir(parameters.debug_mode)
+    directoryInfo = DirectoryInfo(parameters.output_dir, parameters.camera_name)
+    directoryInfo.makedir()
     counter = PeopleCounter(directoryInfo)
 
     # フレーム毎に呼ばれるコールバックをPeopleFlowManagerで設定
