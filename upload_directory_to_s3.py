@@ -1,20 +1,7 @@
 import os
-import json
 import sys
 import aws_access_tools # 自作関数群
 from botocore.exceptions import ClientError
-
-
-
-def load_config(path):
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"設定ファイルが見つかりません: {path}")
-    
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"設定ファイルの形式が不正です: {e}")
 
 def upload_directory_to_s3(s3_client, local_directory, bucket_name, s3_prefix='', delete_after_upload=False):
     """
@@ -112,7 +99,7 @@ if __name__ == "__main__":
 
     script_dir = os.path.dirname(os.path.abspath(__file__)) # カレントディレクトリの取得
     config_path = os.path.join(script_dir, "config.json")   # カレントに"config.json"がある前提
-    upload_dir = load_config(config_path)['OUTPUT_DIR']    # S3にアップロードするディレクトリの特定
+    upload_dir = aws_access_tools.load_config(config_path)['OUTPUT_DIR']    # S3にアップロードするディレクトリの特定
     
     # 環境変数から取得した値を使用
     DELETE_AFTER_UPLOAD = os.getenv('DELETE_AFTER_UPLOAD', 'false').lower() == 'true'

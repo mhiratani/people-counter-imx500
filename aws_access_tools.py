@@ -1,5 +1,6 @@
 import os
 import boto3
+import json
 from botocore.exceptions import ClientError, NoCredentialsError
 
 def check_and_get_env_vars(required_vars):
@@ -63,3 +64,16 @@ def create_s3_client(env_vars):
     except ClientError as e:
         print(f"エラー: AWS接続エラー - {e}")
         return None
+    
+def load_config(path):
+    """
+    設定ファイルを読み込む
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"設定ファイルが見つかりません: {path}")
+    
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"設定ファイルの形式が不正です: {e}")
