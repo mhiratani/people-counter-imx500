@@ -2,7 +2,7 @@ import os
 import boto3
 import json
 import sys
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, NoCredentialsError
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -41,14 +41,26 @@ def check_and_get_env_vars():
 
 def create_s3_client(env_vars):
     """
-    S3クライアントを作成する関数
+    S3クライアントを作成し、認証をテストする関数
     """
-    return boto3.client(
-        's3',
-        aws_access_key_id=env_vars['AWS_ACCESS_KEY_ID'],
-        aws_secret_access_key=env_vars['AWS_SECRET_ACCESS_KEY'],
-        region_name=env_vars['AWS_REGION']
-    )
+    try:
+        client = boto3.client(
+            's3',
+            aws_access_key_id=env_vars['AWS_ACCESS_KEY_ID'],
+            aws_secret_access_key=env_vars['AWS_SECRET_ACCESS_KEY'],
+            region_name=env_vars['AWS_REGION']
+        )
+        # 認証テスト
+        client.list_buckets()
+        return client
+        
+    except NoCredentialsError:
+        print("エラー: AWS認証情報が無効です")
+        return None
+    except ClientError as e:
+        print(f"エラー: AWS接続エラー - {e}")
+        return None
+
 
 def load_config(path):
     if not os.path.exists(path):
