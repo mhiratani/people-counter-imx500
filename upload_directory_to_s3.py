@@ -1,65 +1,9 @@
 import os
-import boto3
 import json
 import sys
-from botocore.exceptions import ClientError, NoCredentialsError
-from datetime import datetime
-from dotenv import load_dotenv
+import aws_access_tools # 自作関数群
+from botocore.exceptions import ClientError
 
-# .envファイルから環境変数を読み込む
-load_dotenv()
-
-def check_and_get_env_vars():
-    """
-    必要な環境変数が設定されているかチェックし、取得する関数
-    """
-    required_vars = [
-        'AWS_ACCESS_KEY_ID',
-        'AWS_SECRET_ACCESS_KEY', 
-        'AWS_REGION',
-        'S3_BUCKET_NAME'
-    ]
-    
-    env_vars = {}
-    missing_vars = []
-    
-    for var in required_vars:
-        value = os.getenv(var)
-        if not value:
-            missing_vars.append(var)
-        else:
-            env_vars[var] = value
-    
-    if missing_vars:
-        print("エラー: 以下の環境変数が設定されていません:")
-        for var in missing_vars:
-            print(f"  - {var}")
-        print("\n.envファイルまたはシステム環境変数を確認してください。")
-        return None
-    
-    return env_vars
-
-def create_s3_client(env_vars):
-    """
-    S3クライアントを作成し、認証をテストする関数
-    """
-    try:
-        client = boto3.client(
-            's3',
-            aws_access_key_id=env_vars['AWS_ACCESS_KEY_ID'],
-            aws_secret_access_key=env_vars['AWS_SECRET_ACCESS_KEY'],
-            region_name=env_vars['AWS_REGION']
-        )
-        # 認証テスト
-        client.list_buckets()
-        return client
-        
-    except NoCredentialsError:
-        print("エラー: AWS認証情報が無効です")
-        return None
-    except ClientError as e:
-        print(f"エラー: AWS接続エラー - {e}")
-        return None
 
 
 def load_config(path):
@@ -146,22 +90,33 @@ def upload_directory_to_s3(s3_client, local_directory, bucket_name, s3_prefix=''
 
 
 if __name__ == "__main__":
+    # 参照したい環境変数を指定
+    required_vars = [
+    'AWS_ACCESS_KEY_ID',
+    'AWS_SECRET_ACCESS_KEY', 
+    'AWS_REGION',
+    'S3_BUCKET_NAME'
+    ]
+
     # 環境変数チェック・取得
-    env_vars = check_and_get_env_vars()
+    env_vars = aws_access_tools.check_and_get_env_vars(required_vars)
     if env_vars is None:
         sys.exit(1)
     
     # S3クライアントを作成
-    s3_client = create_s3_client(env_vars)
-    
+    s3_client = aws_access_tools.create_s3_client(env_vars)
+    # バケットアクセス検証
+    bucket_name = env_vars['S3_BUCKET_NAME']
+    if not aws_access_tools.validate_bucket_access(s3_client, bucket_name):
+        sys.exit(1)
+
     script_dir = os.path.dirname(os.path.abspath(__file__)) # カレントディレクトリの取得
     config_path = os.path.join(script_dir, "config.json")   # カレントに"config.json"がある前提
     upload_dir = load_config(config_path)['OUTPUT_DIR']    # S3にアップロードするディレクトリの特定
     
     # 環境変数から取得した値を使用
-    BUCKET_NAME = env_vars['S3_BUCKET_NAME']
     DELETE_AFTER_UPLOAD = os.getenv('DELETE_AFTER_UPLOAD', 'false').lower() == 'true'
-    S3_PREFIX = os.getenv('S3_PREFIX', '')  # デフォルトは空文字
+    s3_prefix = os.getenv('S3_PREFIX', '')  # デフォルトは空文字
 
     # ディレクトリをアップロード
-    upload_directory_to_s3(s3_client, upload_dir, BUCKET_NAME, S3_PREFIX, DELETE_AFTER_UPLOAD)
+    upload_directory_to_s3(s3_client, upload_dir, bucket_name, s3_prefix, DELETE_AFTER_UPLOAD)
