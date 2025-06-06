@@ -1,6 +1,7 @@
 import os
 import boto3
 import json
+import sys
 from botocore.exceptions import ClientError
 from datetime import datetime
 from dotenv import load_dotenv
@@ -8,16 +9,59 @@ from dotenv import load_dotenv
 # .envファイルから環境変数を読み込む
 load_dotenv()
 
-def load_config(path):
-    with open(path, 'r') as f:
-        return json.load(f)
+def check_required_env_vars():
+    """
+    必要な環境変数が設定されているかチェックする関数
+    """
+    required_vars = [
+        'AWS_ACCESS_KEY_ID',
+        'AWS_SECRET_ACCESS_KEY', 
+        'AWS_REGION',
+        'S3_BUCKET_NAME'
+    ]
+    
+    missing_vars = []
+    for var in required_vars:
+        if not os.getenv(var):
+            missing_vars.append(var)
+    
+    if missing_vars:
+        print("エラー: 以下の環境変数が設定されていません:")
+        for var in missing_vars:
+            print(f"  - {var}")
+        print("\n.envファイルまたはシステム環境変数を確認してください。")
+        return False
+    
+    return True
 
-def upload_directory_to_s3(local_directory, bucket_name, s3_prefix='', delete_after_upload=False):
+def create_s3_client():
+    """
+    S3クライアントを作成する関数
+    """
+    return boto3.client(
+        's3',
+        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+        region_name=os.getenv('AWS_REGION')
+    )
+
+def load_config(path):
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"設定ファイルが見つかりません: {path}")
+    
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"設定ファイルの形式が不正です: {e}")
+
+def upload_directory_to_s3(s3_client, local_directory, bucket_name, s3_prefix='', delete_after_upload=False):
     """
     ローカルディレクトリ全体をS3バケットにアップロードする関数
     アップロード成功後にファイルを削除するオプションあり（ディレクトリ構造は維持）
 
     Parameters:
+        s3_client: S3クライアントオブジェクト
         local_directory (str): アップロードするローカルディレクトリのパス
         bucket_name (str): アップロード先のS3バケット名
         s3_prefix (str): S3内のプレフィックス（フォルダパス）
@@ -25,14 +69,6 @@ def upload_directory_to_s3(local_directory, bucket_name, s3_prefix='', delete_af
     Returns:
         bool: 成功した場合はTrue、失敗した場合はFalse
     """
-    # .envから読み込んだ環境変数を使用してS3クライアントを作成
-    s3_client = boto3.client(
-        's3',
-        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-        region_name=os.getenv('AWS_REGION')
-    )
-
     # ディレクトリが存在するか確認
     if not os.path.isdir(local_directory):
         print(f"ディレクトリが見つかりません: {local_directory}")
@@ -93,12 +129,19 @@ def upload_directory_to_s3(local_directory, bucket_name, s3_prefix='', delete_af
 
 
 if __name__ == "__main__":
+    # 環境変数チェック
+    if not check_required_env_vars():
+        sys.exit(1)
+    
+    # S3クライアントを作成
+    s3_client = create_s3_client()
+    
     script_dir = os.path.dirname(os.path.abspath(__file__)) # カレントディレクトリの取得
     config_path = os.path.join(script_dir, "config.json")   # カレントに"config.json"がある前提
-    up_load_dir = load_config(config_path)['OUTPUT_DIR']    # S3にアップロードするディレクトリの特定
+    upload_dir = load_config(config_path)['OUTPUT_DIR']    # S3にアップロードするディレクトリの特定
     BUCKET_NAME = os.getenv('S3_BUCKET_NAME')
     DELETE_AFTER_UPLOAD = os.getenv('DELETE_AFTER_UPLOAD', 'false').lower() == 'true'
     S3_PREFIX = os.getenv('S3_PREFIX', '')  # デフォルトは空文字
 
     # ディレクトリをアップロード
-    upload_directory_to_s3(up_load_dir, BUCKET_NAME, S3_PREFIX, DELETE_AFTER_UPLOAD)
+    upload_directory_to_s3(s3_client, upload_dir, BUCKET_NAME, S3_PREFIX, DELETE_AFTER_UPLOAD)
