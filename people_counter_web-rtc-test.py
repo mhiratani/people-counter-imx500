@@ -43,6 +43,9 @@ from filterpy.kalman import KalmanFilter
 #MODEL_PATH = "/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk"
 MODEL_PATH = "/usr/share/imx500-models/imx500_network_nanodet_plus_416x416_pp.rpk"
 
+# 描画用の色の定義
+GREEN = (0, 128, 0)   # 緑
+RED = (0, 0, 255)     # 赤
 # ======= クラス定義 =======
 class Parameter:
     def __init__(self, model_path=MODEL_PATH):
@@ -1353,8 +1356,8 @@ class PeopleFlowManager:
     def _get_person_color(self, person):
         """人物の方向に基づいて色を決定"""
         color_map = {
-            "left_to_right": (0, 128, 0),    # 緑
-            "right_to_left": (0, 0, 255),    # 赤
+            "left_to_right": GREEN,
+            "right_to_left": RED,
         }
         return color_map.get(person.crossed_direction, (255, 255, 255))  # デフォルト: 白
 
@@ -1389,9 +1392,9 @@ class PeopleFlowManager:
         """カウント情報と時刻を描画"""
         # カウント情報
         cv2.putText(array, f"right_to_left: {counter_snapshot['right_to_left']}", 
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, RED , 2)
         cv2.putText(array, f"left_to_right: {counter_snapshot['left_to_right']}", 
-                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 128, 0), 2)
+                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, GREEN, 2)
         
         # 時刻とフレームID
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
