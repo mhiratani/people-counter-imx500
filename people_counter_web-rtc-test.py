@@ -44,7 +44,8 @@ from filterpy.kalman import KalmanFilter
 MODEL_PATH = "/usr/share/imx500-models/imx500_network_nanodet_plus_416x416_pp.rpk"
 
 # 描画用の色の定義
-GREEN = (0, 128, 0)   # 緑
+# GREEN = (0, 128, 0)   # 緑
+GREEN = (100, 255, 100)   # 少し柔らかい明るめの緑
 RED = (0, 0, 255)     # 赤
 # ======= クラス定義 =======
 class Parameter:
