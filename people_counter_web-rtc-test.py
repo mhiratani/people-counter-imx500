@@ -71,16 +71,16 @@ class Parameter:
         self.center_line_margin_px      = self.config.get('CENTER_LINE_MARGIN_PX')              # ライン中心から±何ピクセルを「ライン近傍」とみなすかの閾値（ピクセル数）
         self.recovery_distance_px       = self.config.get('RECOVERY_DISTANCE_PX')               # 過去の人物と新しい検出の中心座標（x）の距離が 何ピクセル以内なら「同一人物が復帰した」とみなすかの閾値
         self.tracking_timeout           = self.config.get('TRACKING_TIMEOUT')                   # 人物を追跡し続ける最大時間（秒）
-        self.active_timeout_sec         = self.config.get('ACTIVE_TIMEOUT_SEC')                 # lost_people保持猶予(秒)
+        self.active_timeout             = self.config.get('ACTIVE_TIMEOUT')                     # lost_people保持猶予(秒)
         self.distance_cost_normalize_px = self.config.get('DISTANCE_COST_NORMALIZE_PX')         # 距離正規化用(px)距離をこの値で割った値をコストとする
         self.direction_stability_margin_px = self.config.get('DIRECTION_STABILITY_MARGIN_PX')   # 検出座標の「揺れ」「ノイズ」で頻繁に逆方向へのマッチに与える追加コストが入ってしまうため指定した範囲(px)を許容する
         self.direction_mismatch_penalty = self.config.get('DIRECTION_MISMATCH_PENALTY')         # 逆方向へのマッチに与える追加コスト
         self.max_acceptable_cost        = self.config.get('MAX_ACCEPTABLE_COST')                # 最大許容コスト
-        self.min_box_height             = self.config.get('MIN_BOX_HEIGHT')                     # 人物ボックスの高さフィルタ。これより小さいBoxは排除(ピクセル)
-        self.max_box_height             = self.config.get('MAX_BOX_HEIGHT')                     # 人物ボックスの高さフィルタ。これより大きいBoxは排除(ピクセル)
-        self.log_output_interval_sec    = self.config.get('LOG_OUTPUT_INTERVAL_SEC')            # ログ出力間隔（秒）
-        self.output_dir                 = self.config.get('OUTPUT_DIR', 'people_count_data')    # ログデータを保存するディレクトリ名
-        self.log_interval               = 10
+        self.min_box_height_px          = self.config.get('MIN_BOX_HEIGHT_PX')                  # 人物ボックスの高さフィルタ。これより小さいBoxは排除(ピクセル)
+        self.max_box_height_px          = self.config.get('MAX_BOX_HEIGHT_PX')                  # 人物ボックスの高さフィルタ。これより大きいBoxは排除(ピクセル)
+        self.count_data_output_interval = self.config.get('COUNT_DATA_OUTPUT_INTERVAL')         # カウントデータ(JSONファイル)を出力して保存する間隔(秒)
+        self.count_data_output_dir      = self.config.get('COUNT_DATA_OUTPUT_DIR')              # 出力されたカウントデータ(JSONファイル)の保存ディレクトリ名
+        self.status_update_interval     = self.config.get('STATUS_UPDATE_INTERVAL')             # 定期ログ出力の間隔(秒)
 
     def _load_config(self, path):
         with open(path, 'r') as f:
@@ -142,14 +142,14 @@ class CameraTrack(VideoStreamTrack):
             return video_frame
 
 class DirectoryInfo:
-    def __init__(self, output_dir, output_prefix):
-        self.output_dir = output_dir
+    def __init__(self, count_data_output_dir, output_prefix):
+        self.count_data_output_dir = count_data_output_dir
         self.output_prefix = output_prefix
-        self.date_dir = os.path.join(output_dir, datetime.now().strftime("%Y-%m-%d"))
+        self.date_dir = os.path.join(count_data_output_dir, datetime.now().strftime("%Y-%m-%d"))
 
     def makedir(self):
     # 出力ディレクトリの作成
-        os.makedirs(self.output_dir, exist_ok=True)
+        os.makedirs(self.count_data_output_dir, exist_ok=True)
         os.makedirs(self.date_dir, exist_ok=True)
 
 class Detection:
@@ -270,7 +270,7 @@ class Detection:
             # フィルタ: 最小ボックス高さ未満・最大ボックス高さ超過の検出を除去
             detections = [
                 det for det in detections
-                if parameters.min_box_height <= det.box[3] <= parameters.max_box_height
+                if parameters.min_box_height_px <= det.box[3] <= parameters.max_box_height_px
             ]
             return detections
         
@@ -1019,7 +1019,7 @@ class PeopleFlowManager:
         Returns:
             bool: 時間条件を満たす場合True
         """
-        return current_time - lost_person.lost_start_time < self.parameters.active_timeout_sec
+        return current_time - lost_person.lost_start_time < self.parameters.active_timeout
 
     def _check_position_condition(self, lost_person, detection):
         """
@@ -1110,7 +1110,7 @@ class PeopleFlowManager:
         """タイムアウトした人物を削除"""
         return [
             person for person in lost_people 
-            if current_time - person.lost_start_time < self.parameters.active_timeout_sec
+            if current_time - person.lost_start_time < self.parameters.active_timeout
         ]
 
     def _add_new_people(self, matched_people, detections, used_detections):
@@ -1183,8 +1183,8 @@ class PeopleFlowManager:
         self._update_tracking(detections, frame_id, center_line_x)
         tracking_time = time.time() - tracking_start
 
-        # フレーム落ち判定（例：33ms = 30FPS基準）
-        frame_threshold = 0.033  # 30FPSの場合
+        # フレーム落ち判定
+        frame_threshold = 0.033  # 33ms = 30FPSの場合
         total_time = time.time() - start_time
         
         if detection_time > frame_threshold:
@@ -1489,7 +1489,11 @@ class PeopleFlowManager:
 
     def _handle_periodic_logging(self, current_time):
         """定期的なログ出力"""
-        if current_time - self.last_log_time >= self.parameters.log_interval:
+        interval = self.parameters.status_update_interval
+        if interval <= 0:
+            # 出力しない
+            return
+        if current_time - self.last_log_time >= interval:
             self.last_log_time = current_time
             self._log_status_update(current_time)
 
@@ -1497,7 +1501,7 @@ class PeopleFlowManager:
         """ステータス更新ログを出力"""
         total_counts = self.counter.get_total_counts()
         elapsed = int(current_time - self.counter.last_save_time)
-        remaining = max(0, int(self.parameters.log_output_interval_sec - elapsed))
+        remaining = max(0, int(self.parameters.count_data_output_interval - elapsed))
         
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
@@ -1509,9 +1513,8 @@ class PeopleFlowManager:
         print("--------------------------------------------------")
 
     def _handle_periodic_saving(self, current_time):
-        """定期的なデータ保存"""
-        # 指定間隔ごとにJSONファイルに保存
-        if current_time - self.counter.last_save_time >= self.parameters.log_output_interval_sec:
+        """指定間隔ごとにカウントデータをJSONファイルに保存"""
+        if current_time - self.counter.last_save_time >= self.parameters.count_data_output_interval:
             self.counter.save_to_json()
 
 # ======= メイン処理 =======
@@ -1578,7 +1581,7 @@ def camera_main(stop_event, args, loop):
 
     # 各種パラメータクラス初期化
     camera = Camera(picam2, imx500)
-    directoryInfo = DirectoryInfo(parameters.output_dir, parameters.camera_name)
+    directoryInfo = DirectoryInfo(parameters.count_data_output_dir, parameters.camera_name)
     directoryInfo.makedir()
     counter = PeopleCounter(directoryInfo)
 
@@ -1586,8 +1589,11 @@ def camera_main(stop_event, args, loop):
     manager = PeopleFlowManager(config, loop, counter, directoryInfo, intrinsics, camera, parameters)
     picam2.pre_callback = manager.process_frame
 
-    print(f"人流カウント開始 - {parameters.log_output_interval_sec}秒ごとにデータを保存します")
-    print(f"ログは{parameters.log_interval}秒ごとに出力されます")
+    print(f"人流カウント開始 - {parameters.count_data_output_interval}秒ごとにデータを保存します")
+    if parameters.status_update_interval > 0:
+        print(f"ログは{parameters.status_update_interval}秒ごとに出力されます")
+    else:
+        print("ログは出力されません")
     print("Ctrl+Cで終了します")
     
     try:
