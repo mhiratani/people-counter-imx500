@@ -9,6 +9,7 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment    # scipyの線形割当アルゴリズム
 from dataclasses import dataclass
 from typing import Optional, Set, List
+from enum import Enum, auto
 
 # NMS(Non-Maximum Suppression)適用
 import torch
@@ -48,12 +49,22 @@ MODEL_PATH = "/usr/share/imx500-models/imx500_network_nanodet_plus_416x416_pp.rp
 GREEN = (100, 255, 100)   # 少し柔らかい明るめの緑
 RED = (0, 0, 255)     # 赤
 # ======= クラス定義 =======
+class CountDirection(Enum):
+    LEFT_TO_RIGHT = auto()
+    RIGHT_TO_LEFT = auto()
+    BOTH = auto()
+
 class Parameter:
     def __init__(self, model_path=MODEL_PATH):
         self.config = self._load_config('config.json')
         self.camera_name                = self._get_cameraname()
         self.model_path                  = model_path
         self.person_class_id            = 0     # 人物クラスのID（通常COCOデータセットでは0）
+        direction_str                   = self.config.get('COUNT_DIRECTION','BOTH')             # カウントしたい人の移動方向の指定
+        try:
+            self.count_direction = CountDirection[direction_str]    # 取得した文字列をEnumに変換
+        except KeyError:
+            self.count_direction = CountDirection.BOTH
         self.detection_threshold        = self.config.get('DETECTION_THRESHOLD')                # 検出器が出力する「検出信頼度スコア」の下限値。これ未満は無視する。
         self.iou_threshold              = self.config.get('IOU_THRESHOLD',)                     # NMS(非最大抑制)で、検出ボックス同士の重なり(IoU)がこの値を超えた場合に低信頼度側を除去するためのしきい値
         self.max_detections             = self.config.get('MAX_DETECTIONS',)                    # 1フレームで扱う検出結果の最大数。これ以上は間引きされるか無視される
@@ -1139,17 +1150,20 @@ class PeopleFlowManager:
         for i in range(1, len(person.trajectory)):
             prev_x = person.trajectory[i-1][0]
             curr_x = person.trajectory[i][0]
+            
             # 左→右: 中央線を未満→以上で通過
             if min(prev_x, curr_x) < center_line_x <= max(prev_x, curr_x):
                 # ラインをどちら方向にまたいだか判定
                 if prev_x < center_line_x:
-                    person.crossed_direction = "left_to_right"
-                    return "left_to_right"
-                
+                    if self.parameters.count_direction in (CountDirection.LEFT_TO_RIGHT, CountDirection.BOTH):
+                        person.crossed_direction = "left_to_right"
+                        return "left_to_right"
                 # 右→左: 中央線を以上→未満で通過
                 else:
-                    person.crossed_direction = "right_to_left"
-                    return "right_to_left"
+                    if self.parameters.count_direction in (CountDirection.RIGHT_TO_LEFT, CountDirection.BOTH):
+                        person.crossed_direction = "right_to_left"
+                        return "right_to_left"
+        return None
 
     def process_frame(self, request):
         """フレームごとの処理を行うコールバック関数"""
@@ -1391,16 +1405,21 @@ class PeopleFlowManager:
 
     def _draw_count_info(self, array, frame_id, counter_snapshot):
         """カウント情報と時刻を描画"""
-        # カウント情報
-        cv2.putText(array, f"right_to_left: {counter_snapshot['right_to_left']}", 
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, RED , 2)
-        cv2.putText(array, f"left_to_right: {counter_snapshot['left_to_right']}", 
-                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, GREEN, 2)
-        
+        y_pos = 30  # 描画位置の初期値
+        if self.parameters.count_direction == CountDirection.RIGHT_TO_LEFT or self.parameters.count_direction == CountDirection.BOTH:
+            cv2.putText(array, f"right_to_left: {counter_snapshot['right_to_left']}", 
+                        (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.7, RED, 2)
+            y_pos += 30  # 次の行へ
+
+        if self.parameters.count_direction == CountDirection.LEFT_TO_RIGHT or self.parameters.count_direction == CountDirection.BOTH:
+            cv2.putText(array, f"left_to_right: {counter_snapshot['left_to_right']}", 
+                        (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.7, GREEN, 2)
+            y_pos += 30  # 次の行へ
+
         # 時刻とフレームID
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         text_str = f"FrameID: {frame_id} / {timestamp}"
-        cv2.putText(array, text_str, (10, 90), 
+        cv2.putText(array, text_str, (10, y_pos), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
     def _handle_webrtc_streaming(self, array):
