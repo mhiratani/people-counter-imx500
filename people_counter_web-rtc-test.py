@@ -59,7 +59,7 @@ class Parameter:
         self.config = self._load_config('config.json')
         self.camera_name                = self._get_cameraname()
         self.model_path                  = model_path
-        self.person_class_id            = 0     # 人物クラスのID（通常COCOデータセットでは0）
+        self.person_class_id            = 0     # 人物クラスのID(通常COCOデータセットでは0)
         direction_str                   = self.config.get('COUNT_DIRECTION','BOTH')             # カウントしたい人の移動方向の指定
         try:
             self.count_direction = CountDirection[direction_str]    # 取得した文字列をEnumに変換
@@ -68,9 +68,9 @@ class Parameter:
         self.detection_threshold        = self.config.get('DETECTION_THRESHOLD')                # 検出器が出力する「検出信頼度スコア」の下限値。これ未満は無視する。
         self.iou_threshold              = self.config.get('IOU_THRESHOLD',)                     # NMS(非最大抑制)で、検出ボックス同士の重なり(IoU)がこの値を超えた場合に低信頼度側を除去するためのしきい値
         self.max_detections             = self.config.get('MAX_DETECTIONS',)                    # 1フレームで扱う検出結果の最大数。これ以上は間引きされるか無視される
-        self.center_line_margin_px      = self.config.get('CENTER_LINE_MARGIN_PX')              # ライン中心から±何ピクセルを「ライン近傍」とみなすかの閾値（ピクセル数）
-        self.recovery_distance_px       = self.config.get('RECOVERY_DISTANCE_PX')               # 過去の人物と新しい検出の中心座標（x）の距離が 何ピクセル以内なら「同一人物が復帰した」とみなすかの閾値
-        self.tracking_timeout           = self.config.get('TRACKING_TIMEOUT')                   # 人物を追跡し続ける最大時間（秒）
+        self.center_line_margin_px      = self.config.get('CENTER_LINE_MARGIN_PX')              # ライン中心から±何ピクセルを「ライン近傍」とみなすかの閾値(ピクセル数)
+        self.recovery_distance_px       = self.config.get('RECOVERY_DISTANCE_PX')               # 過去の人物と新しい検出の中心座標(x)の距離が 何ピクセル以内なら「同一人物が復帰した」とみなすかの閾値
+        self.tracking_timeout           = self.config.get('TRACKING_TIMEOUT')                   # 人物を追跡し続ける最大時間(秒)
         self.active_timeout             = self.config.get('ACTIVE_TIMEOUT')                     # lost_people保持猶予(秒)
         self.distance_cost_normalize_px = self.config.get('DISTANCE_COST_NORMALIZE_PX')         # 距離正規化用(px)距離をこの値で割った値をコストとする
         self.direction_stability_margin_px = self.config.get('DIRECTION_STABILITY_MARGIN_PX')   # 検出座標の「揺れ」「ノイズ」で頻繁に逆方向へのマッチに与える追加コストが入ってしまうため指定した範囲(px)を許容する
@@ -122,14 +122,14 @@ class CameraTrack(VideoStreamTrack):
             frame = await asyncio.wait_for(self.queue.get(), timeout=0.5)
             # print("CameraTrack got frame from queue!", frame.shape, frame.dtype, frame.max(), frame.min())  # デバッグ用
 
-            # OpenCV画像が偶数高さ・幅でなければ切り詰める（YUV420p変換時に必要）
+            # OpenCV画像が偶数高さ・幅でなければ切り詰める(YUV420p変換時に必要)
             if frame.shape[0] % 2 == 1 or frame.shape[1] % 2 == 1:
                 frame = frame[:frame.shape[0]//2*2, :frame.shape[1]//2*2, :]
 
-            # BGR画像をaiortc用VideoFrameへ変換（内部でYUV420に自動変換される）
+            # BGR画像をaiortc用VideoFrameへ変換(内部でYUV420に自動変換される)
             video_frame = VideoFrame.from_ndarray(frame, format="bgr24")
 
-            # RTP/RTCP用のpts, time_baseをセット（順序保証＆シンク用; VideoStreamTrackに用意されている）
+            # RTP/RTCP用のpts, time_baseをセット(順序保証＆シンク用; VideoStreamTrackに用意されている)
             video_frame.pts, video_frame.time_base = await self.next_timestamp()
             return video_frame  # 正常時：フレーム送信
 
@@ -155,7 +155,7 @@ class DirectoryInfo:
 class Detection:
     """
     オブジェクト検出結果を保持するクラス。
-    属性としてバウンディングボックス（[x, y, w, h]）、カテゴリ、信頼度（conf）を持つ。
+    属性としてバウンディングボックス([x, y, w, h])、カテゴリ、信頼度(conf)を持つ。
     """
     def __init__(self, box, category, conf):
         """
@@ -164,7 +164,7 @@ class Detection:
         Args:
             box (list or tuple): [x, y, w, h]形式のバウンディングボックス座標
             category (int or str): 検出クラスIDまたはラベル
-            conf (float): 信頼度（スコア）
+            conf (float): 信頼度(スコア)
         """
         self.category = category
         self.conf = conf
@@ -192,15 +192,15 @@ class Detection:
         """
         AIモデル推論出力からDetectionオブジェクトリストを生成。
 
-        モデル出力に応じて前処理・後処理を分岐（NanoDet系とSSD系など）。
+        モデル出力に応じて前処理・後処理を分岐(NanoDet系とSSD系など)。
         一定の信頼度を超える「人物」検出のみ抽出し、最終的にバウンディングボックス高さによるフィルタも適用。
 
         Args:
             metadata: モデル出力メタデータ。
-            parameters: 推論パラメータ設定（しきい値、最大検出数、クラスIDなど）。
-            intrinsics: モデル・カメラ内部パラメータ（後処理種別も含む）。
+            parameters: 推論パラメータ設定(しきい値、最大検出数、クラスIDなど)。
+            intrinsics: モデル・カメラ内部パラメータ(後処理種別も含む)。
             imx500: カメラorAI推論デバイスの抽象インターフェース。
-            picam2: カメラデバイスハンドル（実座標変換用）。
+            picam2: カメラデバイスハンドル(実座標変換用)。
 
         Returns:  list[Detection]: フレーム内の人物を表すDetectionインスタンス配列。
         """
@@ -227,7 +227,7 @@ class Detection:
                 # 正規化解除等はimx500.convert_inference_coordsで対応
                 boxes, scores, classes = np_outputs[0][0], np_outputs[1][0], np_outputs[2][0]
 
-                # ▼ Box形状調整（(N,4) でなければreshape）
+                # ▼ Box形状調整((N,4) でなければreshape)
                 if boxes.shape[1] != 4:
                     boxes = np.array(list(zip(*np.array_split(boxes, 4, axis=1))))
                 # ▼ スコアしきい値によるフィルタ
@@ -288,21 +288,21 @@ class Person:
     next_id = 0  # クラス変数。新規インスタンスごとに自動的にIDを割り当てるカウンタ
     
     # カルマンフィルタ関連パラメータ
-    # 初期共分散行列の倍率（初期状態の不確実性）
+    # 初期共分散行列の倍率(初期状態の不確実性)
     KALMAN_INITIAL_COVARIANCE = 10.0    # 初期位置から観測位置まで距離があるため、初期共分散の重要性は低い→調整不要！固定値でOK
 
     # 観測ノイズ : ピクセル単位、検出精度に依存
     KALMAN_OBSERVATION_NOISE = 15.0     # 使用するモデル依存のため、設置現場ごとに調整の予定はない
     """ 調整指針:
         5.0～15.0: 高品質なYOLO、SSD等
-        15.0～30.0: 一般的な検出器（推奨範囲）
+        15.0～30.0: 一般的な検出器(推奨範囲)
     """
 
     # プロセスノイズ : 小さい値：モデル重視、大きい値：観測重視
     KALMAN_PROCESS_NOISE = 0.3          # 今回用途が通路に対する人流カウントのため、概ね予測可能な動きのハズ。大きく変更の必要性はない
     """ 調整指針:
-        0.1～0.5: 予測可能な動き（大人の歩行等）
-        0.5～1.0: 一般的な用途（推奨範囲）
+        0.1～0.5: 予測可能な動き(大人の歩行等)
+        0.5～1.0: 一般的な用途(推奨範囲)
         1.0～   : 急な方向転換など非常に予測困難な動き場合
     """
 
@@ -317,27 +317,27 @@ class Person:
         Person.next_id += 1
 
         self.box = box                          # 最新バウンディングボックス
-        self.trajectory = [self.get_center()]   # tracking用: 中心座標履歴（初期値は現フレーム）
+        self.trajectory = [self.get_center()]   # tracking用: 中心座標履歴(初期値は現フレーム)
         self.first_seen = time.time()           # 初回検出時刻
-        self.last_seen = time.time()            # 最終検出時刻（trackingロスト検出等に使用）
-        self.crossed_direction = None           # 線をまたいだ向き（用途次第・初期値None）
+        self.last_seen = time.time()            # 最終検出時刻(trackingロスト検出等に使用)
+        self.crossed_direction = None           # 線をまたいだ向き(用途次第・初期値None)
         self.lost_start_time = None             # トラッキングロストが始まった時刻
         self.lost_last_box = None               # ロスト時の最後のバウンディングボックス
 
-        # Kalmanフィルタ初期化（人物の位置・速度を推定するため）
+        # Kalmanフィルタ初期化(人物の位置・速度を推定するため)
         cx, cy = self.get_center()
         
-        # 4次元状態ベクトル（位置x,y + 速度dx,dy）、2次元観測ベクトル（位置x,yのみ観測可能）
+        # 4次元状態ベクトル(位置x,y + 速度dx,dy)、2次元観測ベクトル(位置x,yのみ観測可能)
         self.kf = KalmanFilter(dim_x=4, dim_z=2)
         
         # 初期状態: [x座標, y座標, x方向速度, y方向速度]
-        # 速度は初期値0で設定（静止状態から開始と仮定）
+        # 速度は初期値0で設定(静止状態から開始と仮定)
         self.kf.x = np.array([cx, cy, 0, 0])  
         
         # 状態遷移行列F: 等速直線運動モデル
-        # 次の状態 = 現在位置 + 速度×時間（時間間隔=1フレーム）
+        # 次の状態 = 現在位置 + 速度×時間(時間間隔=1フレーム)
         # x(t+1) = x(t) + dx(t), y(t+1) = y(t) + dy(t)
-        # dx(t+1) = dx(t), dy(t+1) = dy(t) （速度は一定と仮定）
+        # dx(t+1) = dx(t), dy(t+1) = dy(t) (速度は一定と仮定)
         self.kf.F = np.array([
             [1,0,1,0],  # x(t+1) = x(t) + dx(t)
             [0,1,0,1],  # y(t+1) = y(t) + dy(t)
@@ -391,7 +391,7 @@ class Person:
         self.kf.update([obs_cx, obs_cy])
         self.trajectory.append((obs_cx, obs_cy))  # 軌跡に現フレーム中心値を追加
 
-        # 履歴数制限：最大30件のみ保持（古い順にpopで削除）
+        # 履歴数制限：最大30件のみ保持(古い順にpopで削除)
         if len(self.trajectory) > 30:
             self.trajectory.pop(0)
         self.last_seen = time.time()               # 最終確認時刻を更新
@@ -467,7 +467,7 @@ class PeopleCounter:
 
     def get_counts(self):
         """
-        期間中（最後に保存してから現在まで）の人数カウントを取得。
+        期間中(最後に保存してから現在まで)の人数カウントを取得。
 
         Returns: dict: {"right_to_left": n, "left_to_right": m}
         """
@@ -555,7 +555,7 @@ class PeopleFlowManager:
 
         Args:
             config: アプリ全体設定
-            counter: 人数カウンタ（PeopleCounterインスタンス）
+            counter: 人数カウンタ(PeopleCounterインスタンス)
             directoryInfo: 保存ディレクトリ・出力プリフィックス等の設定
             intrinsics: カメラ・モデルの内部パラメータ
             camera: カメラデバイスへのアクセス用インスタンス
@@ -609,11 +609,11 @@ class PeopleFlowManager:
     @staticmethod
     def _calculate_iou(box1, box2):
         """
-        IOU（交差率）を計算する関数
-        「左上隅・幅・高さ（[x, y, w, h]）」形式の矩形2つからIoUを算出します。
-        IoU（Intersection over Union）とは、物体検出モデルが予測したバウンディングボックスと
-        正解バウンディングボックス（アノテーション）との重なり具合を評価する指標です。
-        戻り値は「2つの矩形がどれくらい重なっているかの割合（0〜1）」
+        IOU(交差率)を計算する関数
+        「左上隅・幅・高さ([x, y, w, h])」形式の矩形2つからIoUを算出します。
+        IoU(Intersection over Union)とは、物体検出モデルが予測したバウンディングボックスと
+        正解バウンディングボックス(アノテーション)との重なり具合を評価する指標です。
+        戻り値は「2つの矩形がどれくらい重なっているかの割合(0〜1)」
         +-----------+
         | box1      |
         |   +-------|-------+
@@ -626,7 +626,7 @@ class PeopleFlowManager:
             box1 (list): [x, y, w, h]
             box2 (list): [x, y, w, h]
 
-        Returns: float: IoU値（0.0〜1.0）
+        Returns: float: IoU値(0.0〜1.0)
         """
         # box1, box2 のフォーマット: [x, y, w, h]
         x1, y1, w1, h1 = box1
@@ -641,13 +641,13 @@ class PeopleFlowManager:
         box1_tlbr = [x1, y1, x1 + w1, y1 + h1]
         box2_tlbr = [x2, y2, x2 + w2, y2 + h2]
 
-        # 2つの矩形の共通部分（交差領域）の座標を求める
+        # 2つの矩形の共通部分(交差領域)の座標を求める
         x_intersect_min = max(box1_tlbr[0], box2_tlbr[0])
         y_intersect_min = max(box1_tlbr[1], box2_tlbr[1])
         x_intersect_max = min(box1_tlbr[2], box2_tlbr[2])
         y_intersect_max = min(box1_tlbr[3], box2_tlbr[3])
 
-        # 交差領域の幅と高さを計算（重なりがなければ0となる）
+        # 交差領域の幅と高さを計算(重なりがなければ0となる)
         intersect_w = max(0, x_intersect_max - x_intersect_min)
         intersect_h = max(0, y_intersect_max - y_intersect_min)
         intersection_area = intersect_w * intersect_h
@@ -656,8 +656,8 @@ class PeopleFlowManager:
         box1_area = w1 * h1
         box2_area = w2 * h2
 
-        # IoU（交差率）を計算
-        # IoU = 共通領域（intersection）/ 全領域（union）
+        # IoU(交差率)を計算
+        # IoU = 共通領域(intersection)/ 全領域(union)
         union_area = box1_area + box2_area - intersection_area
         iou = intersection_area / union_area if union_area > 0 else 0.0
 
@@ -665,7 +665,7 @@ class PeopleFlowManager:
 
     def _track_people(self, active_people, lost_people, detections, frame_id, center_line_x):
         """
-        検出結果（detections）と既存追跡リスト（active_people）をマッチングし更新。
+        検出結果(detections)と既存追跡リスト(active_people)をマッチングし更新。
         ハンガリアン法＋IoU＋中心距離＋方向ペナルティで追跡管理。
         一時的なロスト復帰、完全ロスト削除も管理。
         new_active_peopleの中身は
@@ -732,8 +732,8 @@ class PeopleFlowManager:
         cost_matrix = np.full((num_people, num_detections), np.inf)
         
         # コスト行列を計算するループ
-        # 既存の追跡ターゲット（active_people）と新たな検出結果（detections）との間で、
-        # 各組み合わせペアごとに「重なり具合（IoU）」と「中心間距離」を算出し、総合的なコストを定義。
+        # 既存の追跡ターゲット(active_people)と新たな検出結果(detections)との間で、
+        # 各組み合わせペアごとに「重なり具合(IoU)」と「中心間距離」を算出し、総合的なコストを定義。
         for i, person in enumerate(active_people):
             # ------- カルマンフィルタによる次フレーム位置予測を実行 -------
             # この呼び出しで Kalman フィルタの内部状態 (self.kf.x) が次フレームの状態に更新される
@@ -744,7 +744,7 @@ class PeopleFlowManager:
             # get_predicted_box は、predict() で更新された self.kf.x を参照して予測ボックスを作成する
             predicted_box = person.get_predicted_box()
             
-            # ------- 検出結果（detections）とコスト計算 -------
+            # ------- 検出結果(detections)とコスト計算 -------
             for j, detection in enumerate(detections):
                 cost = self._calculate_matching_cost(
                     person, detection, predicted_center, predicted_box
@@ -759,15 +759,15 @@ class PeopleFlowManager:
         detection_center = self._get_box_center(detection_box)
         
         # --- 距離・IoU計算 ---
-        # 【距離】予測中心点と検出中心点とのユークリッド距離（ピクセル単位）
+        # 【距離】予測中心点と検出中心点とのユークリッド距離(ピクセル単位)
         distance = self._calculate_euclidean_distance(predicted_center, detection_center)
         # DISTANCE_COST_NORMALIZE_PX設定参考要デバック出力
         # print(f"【距離】予測中心点と検出中心点とのユークリッド距離:{distance}")
-        # 【IoU】予測ボックスと検出boxのIoU（重なり率：0~1）
+        # 【IoU】予測ボックスと検出boxのIoU(重なり率：0~1)
         iou = self._calculate_iou(predicted_box, detection_box)
         # --- 総合コストの定義 ---
-        # 距離が近くIoUが大きい（よく重なっている）ほどコストが小さくなるよう設計
-        # → IoU大・距離小の組み合わせほどcostは小さい（良いマッチングと見なされる）
+        # 距離が近くIoUが大きい(よく重なっている)ほどコストが小さくなるよう設計
+        # → IoU大・距離小の組み合わせほどcostは小さい(良いマッチングと見なされる)
         # 例: 距離をdistance_cost_normalize_pxで割った値を加点, IoU 1.0→加点ゼロ, IoU 0→+1
         # ------- コスト計算 -------
         base_cost = (1.0 - iou) + (distance / self.parameters.distance_cost_normalize_px)
@@ -828,7 +828,7 @@ class PeopleFlowManager:
         # コストが高すぎる場合は不一致とみなす
         # マッチした人物を更新して新しいリストに追加
         for person_idx, detection_idx in matched_pairs:
-            cost = cost_matrix[person_idx, detection_idx]   # マッチングペアのコスト（類似度の逆数）を取得
+            cost = cost_matrix[person_idx, detection_idx]   # マッチングペアのコスト(類似度の逆数)を取得
             
             # コストが閾値未満の場合のみ有効なマッチとして処理
             if cost < self.parameters.max_acceptable_cost:
@@ -849,7 +849,7 @@ class PeopleFlowManager:
         return self.MatchingResult(matched_people, used_detections, used_people)
 
     def _manage_lost_people(self, active_people, lost_people, detections, tracking_result, center_line_x):
-        """ロスト人物の管理（新規ロスト追加、復帰処理、タイムアウト削除）"""
+        """ロスト人物の管理(新規ロスト追加、復帰処理、タイムアウト削除)"""
         current_time = time.time()
         
         # 新規ロスト人物の追加
@@ -881,7 +881,7 @@ class PeopleFlowManager:
         used_people:      今回対応済のactive_peopleのインデックス集合
         current_time:     現フレームのタイムスタンプ
 
-        - active_peopleのうちまだused_peopleに含まれていないものをロストとして扱い（追跡見失い）、
+        - active_peopleのうちまだused_peopleに含まれていないものをロストとして扱い(追跡見失い)、
         lost_peopleリストに追加する。
         - 追跡を失った瞬間の時刻・バウンディングボックス情報も記録する。
         """
@@ -979,7 +979,7 @@ class PeopleFlowManager:
         Args:
             lost_person: 復帰を試行するロスト人物
             detection: 復帰候補の検出結果
-            center_line_x: カウントライン座標（Noneの場合は中心線条件をスキップ）
+            center_line_x: カウントライン座標(Noneの場合は中心線条件をスキップ)
             current_time: 現在時刻
             
         Returns:
@@ -1060,7 +1060,7 @@ class PeopleFlowManager:
         """
         高さ条件のチェック：ボックス高さの類似度が許容範囲内か
         
-        同一人物であれば体格（ボックス高さ）は大きく変わらないという前提
+        同一人物であれば体格(ボックス高さ)は大きく変わらないという前提
         
         Args:
             lost_person: チェック対象のロスト人物
@@ -1082,9 +1082,9 @@ class PeopleFlowManager:
         """
         中心線条件のチェック：中心線に対する位置が移動方向と整合しているか
         
-        移動方向に応じて、適切な側（手前側）にいるかを確認
-        - 右向き移動：中心線の左側（手前側）にいるべき
-        - 左向き移動：中心線の右側（手前側）にいるべき
+        移動方向に応じて、適切な側(手前側)にいるかを確認
+        - 右向き移動：中心線の左側(手前側)にいるべき
+        - 左向き移動：中心線の右側(手前側)にいるべき
         
         Args:
             lost_person: チェック対象のロスト人物
@@ -1197,13 +1197,13 @@ class PeopleFlowManager:
             print(f"[WARNING] 全体処理でフレーム落ち発生: {total_time:.3f}s (frame_id: {frame_id})")
         
 
-        # レンダリング用データをキューに追加（非ブロッキング）
+        # レンダリング用データをキューに追加(非ブロッキング)
         self._queue_render_data(request, frame_height, frame_width, center_line_x, frame_id)
 
         # ライン横断チェックとカウント更新
         self._process_line_crossings(center_line_x, frame)
 
-        # 定期処理（ログ出力、データ保存、古いトラッキング削除）は別スレッドで実行
+        # 定期処理(ログ出力、データ保存、古いトラッキング削除)は別スレッドで実行
         threading.Thread(target=self._handle_periodic_tasks, daemon=True).start()
 
     def _queue_render_data(self, request, frame_height, frame_width, center_line_x, frame_id):
@@ -1329,10 +1329,10 @@ class PeopleFlowManager:
                 # active_peopleのスナップショットを使用して描画
                 self._draw_people_tracking(m.array, render_data['active_people'])
                 
-                # カウント情報の描画（スナップショットを使用）
+                # カウント情報の描画(スナップショットを使用)
                 self._draw_count_info(m.array, frame_id, render_data['counter_snapshot'])
                 
-                # WebRTC配信（3フレームに1回配信）
+                # WebRTC配信(3フレームに1回配信)
                 if self.frame_skip_counter % 3 == 0:
                     self._handle_webrtc_streaming(m.array)
                     
@@ -1440,7 +1440,7 @@ class PeopleFlowManager:
         else:
             frame = array.copy()
         
-        # 解像度調整（必要に応じて）
+        # 解像度調整(必要に応じて)
         return self._resize_frame_for_streaming(frame)
 
     def _resize_frame_for_streaming(self, frame):
@@ -1449,7 +1449,7 @@ class PeopleFlowManager:
         target_width = original_width  # 必要に応じて変更
         target_height = int(original_height * (target_width / original_width))
         
-        # 偶数に調整（YUV420p向け）
+        # 偶数に調整(YUV420p向け)
         target_width = (target_width // 2) * 2
         target_height = (target_height // 2) * 2
         
@@ -1468,7 +1468,7 @@ class PeopleFlowManager:
                     self.counter.update(direction)
 
     def _handle_periodic_tasks(self):
-        """定期処理（ログ出力、データ保存、古いトラッキング削除）"""
+        """定期処理(ログ出力、データ保存、古いトラッキング削除)"""
         current_time = time.time()
         
         # 古いトラッキング対象を削除 (last_seen が TRACKING_TIMEOUT を超えたもの)
@@ -1528,7 +1528,7 @@ def camera_main(stop_event, args, loop):
         imx500 = IMX500(parameters.model_path)
         intrinsics = imx500.network_intrinsics
 
-        # intrinsics（ネットワーク情報）の検証
+        # intrinsics(ネットワーク情報)の検証
         if not intrinsics:
             intrinsics = NetworkIntrinsics()
             intrinsics.task = "object detection"  # デフォルトでオブジェクト検出タスクとする
@@ -1539,7 +1539,7 @@ def camera_main(stop_event, args, loop):
         # ラベル未設定時はCOCOデータセット用のラベルをロード
         if intrinsics.labels is None:
             try:
-                # assets/coco_labels.txtのパスを決定（実行ディレクトリからの相対パス）
+                # assets/coco_labels.txtのパスを決定(実行ディレクトリからの相対パス)
                 label_path = os.path.join(os.path.dirname(__file__), "assets/coco_labels.txt")
                 with open(label_path, "r") as f:
                     intrinsics.labels = f.read().splitlines()
@@ -1687,9 +1687,9 @@ async def web_server(stop_event):
     """
     app = web.Application()
 
-    # POST /offer へのリクエストルート追加（SDPシグナリング）
+    # POST /offer へのリクエストルート追加(SDPシグナリング)
     app.router.add_post('/offer', offer)
-    # OPTIONS /offer へのリクエスト対応（CORSサポート）
+    # OPTIONS /offer へのリクエスト対応(CORSサポート)
     app.router.add_options('/offer', options_handler)  # 追加
 
     # サーバ起動処理
