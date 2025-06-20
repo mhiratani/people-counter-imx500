@@ -1,5 +1,0 @@
-services:
-  rtsp-server:
-    image: bluenviron/mediamtx
-    network_mode: host
-    restart: always

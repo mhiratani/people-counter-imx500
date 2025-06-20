@@ -4,9 +4,16 @@ import os
 import sys
 import time
 from datetime import datetime
-from functools import lru_cache
 import numpy as np
 from scipy.optimize import linear_sum_assignment    # scipyの線形割当アルゴリズム
+from dataclasses import dataclass
+from typing import Optional, Set, List
+from enum import Enum, auto
+import queue
+import threading
+import asyncio
+# グローバルでQueue用意 
+frame_queue = asyncio.Queue(maxsize=5)
 
 # NMS(Non-Maximum Suppression)適用
 import torch
@@ -16,13 +23,7 @@ from picamera2 import MappedArray, Picamera2
 from picamera2.devices import IMX500
 from picamera2.devices.imx500 import (NetworkIntrinsics, postprocess_nanodet_detection)
 from picamera2.devices.imx500.postprocess import scale_boxes
-
 import modules
-
-# ffmpegによるRTSP配信プロセス用
-import queue
-import threading
-import subprocess
 
 # 描画設定
 import cv2
@@ -35,31 +36,43 @@ from filterpy.kalman import KalmanFilter
 #MODEL_PATH = "/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk"
 MODEL_PATH = "/usr/share/imx500-models/imx500_network_nanodet_plus_416x416_pp.rpk"
 
+# 描画用の色の定義
+# GREEN = (0, 128, 0)   # 緑
+GREEN = (100, 255, 100)   # 少し柔らかい明るめの緑
+RED = (0, 0, 255)     # 赤
 # ======= クラス定義 =======
+class CountDirection(Enum):
+    LEFT_TO_RIGHT = auto()
+    RIGHT_TO_LEFT = auto()
+    BOTH = auto()
+
 class Parameter:
     def __init__(self, model_path=MODEL_PATH):
         self.config = self._load_config('config.json')
         self.camera_name                = self._get_cameraname()
         self.model_path                  = model_path
-        self.person_class_id            = 0     # 人物クラスのID（通常COCOデータセットでは0）
-        self.detection_threshold        = self.config.get('DETECTION_THRESHOLD')                # 検出器が出力する「検出信頼度スコア」の下限値。これ未満は無視する。
-        self.iou_threshold              = self.config.get('IOU_THRESHOLD',)                     # マッチング時、追跡対象と検出結果の「バウンディングボックスの重なり（IoU）」の下限値
-        self.max_detections             = self.config.get('MAX_DETECTIONS',)                    # 1フレームで扱う検出結果の最大数。これ以上は間引きされるか無視される
-        self.center_line_margin_px      = self.config.get('CENTER_LINE_MARGIN_PX')              # ライン中心から±何ピクセルを「ライン近傍」とみなすかの閾値（ピクセル数）
-        self.recovery_distance_px       = self.config.get('RECOVERY_DISTANCE_PX')               # 過去の人物と新しい検出の中心座標（x）の距離が 何ピクセル以内なら「同一人物が復帰した」とみなすかの閾値
-        self.tracking_timeout           = self.config.get('TRACKING_TIMEOUT')                   # 人物を追跡し続ける最大時間（秒）
-        self.counting_interval          = self.config.get('COUNTING_INTERVAL')                  # カウント間隔（秒）
-        self.active_timeout_sec         = self.config.get('ACTIVE_TIMEOUT_SEC')                 # lost_people保持猶予(秒)
-        self.direction_mismatch_penalty = self.config.get('DIRECTION_MISMATCH_PENALTY')         # 逆方向へのマッチに与える追加コスト
+        self.person_class_id            = 0     # 人物クラスのID(通常COCOデータセットでは0)
+        direction_str                   = self.config.get('COUNT_DIRECTION','BOTH')             # カウント対象となる人物の移動方向を指定する
+        try:
+            self.count_direction = CountDirection[direction_str]    # 取得した文字列をEnumに変換
+        except KeyError:
+            self.count_direction = CountDirection.BOTH
+        self.iou_threshold              = self.config.get('IOU_THRESHOLD',)                     # NMS(非最大抑制)で、検出ボックス同士の重なり(IoU)がこの値を超えた場合に低信頼度側を除去するためのしきい値
+        self.max_detections             = self.config.get('MAX_DETECTIONS',)                    # 1フレームで取り扱う検出結果の最大数_個
+        self.detection_threshold        = self.config.get('DETECTION_THRESHOLD')                # 検出器が出力する「検出信頼度スコア」の下限値
+        self.min_box_height_px          = self.config.get('MIN_BOX_HEIGHT_PX')                  # 許容する人物検出ボックス最小高さ_px
+        self.max_box_height_px          = self.config.get('MAX_BOX_HEIGHT_PX')                  # 許容する人物検出ボックス最大高さ_px
+        self.center_line_margin_px      = self.config.get('CENTER_LINE_MARGIN_PX')              # ライン近傍とする絶対値距離_px
+        self.recovery_distance_px       = self.config.get('RECOVERY_DISTANCE_PX')               # 復帰条件の上限距離_px
+        self.tracking_timeout           = self.config.get('TRACKING_TIMEOUT')                   # active_peopleのうち、最後に認識してから追跡をやめるまでの時間_秒
+        self.active_timeout             = self.config.get('ACTIVE_TIMEOUT')                     # CENTER_LINE_MARGIN_PX内で見失った人物の保持猶予時間_秒
+        self.distance_cost_normalize_px = self.config.get('DISTANCE_COST_NORMALIZE_PX')         # 距離正規化用_px
+        self.direction_stability_margin_px = self.config.get('DIRECTION_STABILITY_MARGIN_PX')   # 検出座標の揺れ、ノイズの許容範囲_px
+        self.direction_mismatch_penalty = self.config.get('DIRECTION_MISMATCH_PENALTY')         # 逆方向マッチ時の追加コスト_px
         self.max_acceptable_cost        = self.config.get('MAX_ACCEPTABLE_COST')                # 最大許容コスト
-        self.min_box_height             = self.config.get('MIN_BOX_HEIGHT')                     # 人物ボックスの高さフィルタ。これより小さいBoxは排除(ピクセル)
-        self.max_box_height             = self.config.get('MAX_BOX_HEIGHT')                     # 人物ボックスの高さフィルタ。これより大きいBoxは排除(ピクセル)
-        self.output_dir                 = self.config.get('OUTPUT_DIR', 'people_count_data')    # ログデータを保存するディレクトリ名
-        self.debug_mode                 = str(self.config.get('DEBUG_MODE', 'False')).lower() == 'true'
-        self.debug_images_subdir_name   = self.config.get('DEBUG_IMAGES_SUBDIR_NAME', 'debug_images')
-        self.rtsp_server_ip             = self.config.get('RTSP_SERVER_IP', 'None')             # RTSP配信先IPアドレス
-        self.rtsp_server_port           = 8554
-        self.log_interval               = 10
+        self.count_data_output_interval = self.config.get('COUNT_DATA_OUTPUT_INTERVAL')         # カウントデータ(JSONファイル)を出力して保存する間隔_秒
+        self.count_data_output_dir      = self.config.get('COUNT_DATA_OUTPUT_DIR')              # 出力されたカウントデータ(JSONファイル)の保存ディレクトリ名
+        self.status_update_interval     = self.config.get('STATUS_UPDATE_INTERVAL')             # 定期ログ出力間隔_秒
 
     def _load_config(self, path):
         with open(path, 'r') as f:
@@ -77,144 +90,21 @@ class Parameter:
 
         return camera_name
 
-class RTSP:
-    """
-    フレームデータをffmpeg経由でRTSPサーバへ配信するためのクラス。
-    フレームは内部キューに蓄積し、別スレッドでffmpegに逐次書き込む。
-    """
-    def __init__(self, rtsp_server_ip, rtsp_server_port, intrinsics, frame_queue_size=3):
-        """
-        コンストラクタ
-
-        Args:
-            rtsp_server_ip (str): RTSPサーバIPアドレス
-            rtsp_server_port (int): RTSPサーバポート
-            intrinsics : 画像・動画フレームの内部パラメータ（推論レートなどを保持）
-            frame_queue_size (int): 内部フレームキューの最大長（デフォルト: 3）
-        """
-        self.rtsp_server_ip = rtsp_server_ip
-        self.rtsp_server_port = rtsp_server_port
-        # ffmpegに送信するフレームの一時保持用キュー。overflow時は古いものから削除。
-        self.frame_queue = queue.Queue(maxsize=frame_queue_size)
-        # ffmpegプロセスの起動と設定
-        self.ffmpeg_proc = self.rtsp_setting(intrinsics)
-        # ffmpegプロセスへデータを書き込むスレッドの起動
-        self.rtsp_thread = self.start_rtsp_thread(self.ffmpeg_proc)
-        self.active = True  # 配信中フラグ
-        self.message = False  # 配信停止メッセージ出力フラグ
-
-    def rtsp_writer_thread(self, ffmpeg_proc):
-        """
-        フレームキューからフレームを取り出してffmpeg stdinへ書き込む無限ループスレッド。
-        Args: ffmpeg_proc (subprocess.Popen): 起動済みffmpegプロセス
-        """
-        while True:
-            frame = self.frame_queue.get()
-            try:
-                # フレームデータをバイト列へ変換してffmpegへ入力
-                ffmpeg_proc.stdin.write(frame.astype(np.uint8).tobytes())
-            except Exception as e:
-                print(f"[RTSP配信エラー]: {e}")
-                self.active = False  # 配信停止
-            finally:
-                self.frame_queue.task_done()
-
-    def start_rtsp_thread(self, ffmpeg_proc):
-        """
-        ffmpegへのフレーム書き込み専用スレッドを起動
-        Args: ffmpeg_proc (subprocess.Popen): 起動済みffmpegプロセス
-        Returns: threading.Thread: 起動したデーモンスレッド
-        """
-        t = threading.Thread(target=self.rtsp_writer_thread, args=(ffmpeg_proc,), daemon=True)
-        t.start()
-        return t
-
-    def send_frame_for_rtsp(self, frame):
-        """
-        キューにフレームを追加（キューが満杯なら古いフレームを捨てて新しいフレームを必ず入れる）
-
-        Args:
-            frame (np.ndarray): 配信したいフレーム
-        """
-        if not self.active:
-            if not self.message:
-                print("RTSP配信は既に停止しています")
-                self.message  = True
-            return
-        try:
-            if self.frame_queue.full():
-                try:
-                    self.frame_queue.get_nowait()  # 古いデータを非同期で破棄
-                except queue.Empty:
-                    pass
-            self.frame_queue.put_nowait(frame)
-        except queue.Full:
-            pass  # 想定外の複数同時処理はスキップ
-
-    def rtsp_setting(self, intrinsics):
-        """
-        RTSP配信用のffmpegプロセスを起動・設定
-        Args: intrinsics: 推論時の内部パラメータ（フレームレート取得に利用）
-        Returns: subprocess.Popen | str: ffmpegプロセス（または異常時は空文字列）
-        """
-        # 初期値。失敗時などはこのまま返す。
-        ffmpeg_proc = ''  
-        if self.rtsp_server_ip != 'None':
-            # 解像度やフレームレート等の設定
-            FRAME_WIDTH  = 640
-            FRAME_HEIGHT = 480
-            FRAME_RATE = int(intrinsics.inference_rate) if hasattr(intrinsics, 'inference_rate') else 15
-            RTSP_URL = f"rtsp://{self.rtsp_server_ip}:{self.rtsp_server_port}/stream"
-
-            # ffmpegプロセス起動用コマンド
-            ffmpeg_cmd = [
-                "ffmpeg",
-                "-nostats",
-                "-loglevel", "error", 
-                "-re",
-                "-f", "rawvideo",
-                "-pix_fmt", "bgr24",
-                "-s", f"{FRAME_WIDTH}x{FRAME_HEIGHT}",
-                "-r", str(FRAME_RATE),
-                "-i", "-",              # 入力：標準入力
-                "-an",                  # 音声なし
-                "-c:v", "libx264",
-                "-preset", "ultrafast", # 低遅延
-                "-tune", "zerolatency",
-                "-f", "rtsp",
-                RTSP_URL
-            ]
-            try:
-                ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
-                print("ffmpegによるRTSP配信プロセス起動")
-            except Exception as e:
-                print(f"ffmpeg起動失敗: {e}")
-                sys.exit(1)
-        else:
-            print(f"RTSP_SERVER_IPが未指定のためRTSP配信は行いません")
-
-        return ffmpeg_proc
-
 class DirectoryInfo:
-    def __init__(self, output_dir, output_prefix, debug_images_subdir_name):
-        self.output_dir = output_dir
+    def __init__(self, count_data_output_dir, output_prefix):
+        self.count_data_output_dir = count_data_output_dir
         self.output_prefix = output_prefix
-        self.date_dir = os.path.join(output_dir, datetime.now().strftime("%Y-%m-%d"))
-        self.debug_images_dir = os.path.join(output_dir, debug_images_subdir_name)
+        self.date_dir = os.path.join(count_data_output_dir, datetime.now().strftime("%Y-%m-%d"))
 
-    def makedir(self, debug_mode):
+    def makedir(self):
     # 出力ディレクトリの作成
-        os.makedirs(self.output_dir, exist_ok=True)
+        os.makedirs(self.count_data_output_dir, exist_ok=True)
         os.makedirs(self.date_dir, exist_ok=True)
-        # デバッグディレクトリの作成
-        if debug_mode:
-            os.makedirs(self.debug_images_dir, exist_ok=True)
-            print(f"デバッグモード有効: 画像を {self.debug_images_dir} に保存")
 
 class Detection:
     """
     オブジェクト検出結果を保持するクラス。
-    属性としてバウンディングボックス（[x, y, w, h]）、カテゴリ、信頼度（conf）を持つ。
+    属性としてバウンディングボックス([x, y, w, h])、カテゴリ、信頼度(conf)を持つ。
     """
     def __init__(self, box, category, conf):
         """
@@ -223,7 +113,7 @@ class Detection:
         Args:
             box (list or tuple): [x, y, w, h]形式のバウンディングボックス座標
             category (int or str): 検出クラスIDまたはラベル
-            conf (float): 信頼度（スコア）
+            conf (float): 信頼度(スコア)
         """
         self.category = category
         self.conf = conf
@@ -251,15 +141,15 @@ class Detection:
         """
         AIモデル推論出力からDetectionオブジェクトリストを生成。
 
-        モデル出力に応じて前処理・後処理を分岐（NanoDet系とSSD系など）。
+        モデル出力に応じて前処理・後処理を分岐(NanoDet系とSSD系など)。
         一定の信頼度を超える「人物」検出のみ抽出し、最終的にバウンディングボックス高さによるフィルタも適用。
 
         Args:
             metadata: モデル出力メタデータ。
-            parameters: 推論パラメータ設定（しきい値、最大検出数、クラスIDなど）。
-            intrinsics: モデル・カメラ内部パラメータ（後処理種別も含む）。
+            parameters: 推論パラメータ設定(しきい値、最大検出数、クラスIDなど)。
+            intrinsics: モデル・カメラ内部パラメータ(後処理種別も含む)。
             imx500: カメラorAI推論デバイスの抽象インターフェース。
-            picam2: カメラデバイスハンドル（実座標変換用）。
+            picam2: カメラデバイスハンドル(実座標変換用)。
 
         Returns:  list[Detection]: フレーム内の人物を表すDetectionインスタンス配列。
         """
@@ -286,7 +176,7 @@ class Detection:
                 # 正規化解除等はimx500.convert_inference_coordsで対応
                 boxes, scores, classes = np_outputs[0][0], np_outputs[1][0], np_outputs[2][0]
 
-                # ▼ Box形状調整（(N,4) でなければreshape）
+                # ▼ Box形状調整((N,4) でなければreshape)
                 if boxes.shape[1] != 4:
                     boxes = np.array(list(zip(*np.array_split(boxes, 4, axis=1))))
                 # ▼ スコアしきい値によるフィルタ
@@ -329,7 +219,7 @@ class Detection:
             # フィルタ: 最小ボックス高さ未満・最大ボックス高さ超過の検出を除去
             detections = [
                 det for det in detections
-                if parameters.min_box_height <= det.box[3] <= parameters.max_box_height
+                if parameters.min_box_height_px <= det.box[3] <= parameters.max_box_height_px
             ]
             return detections
         
@@ -347,21 +237,21 @@ class Person:
     next_id = 0  # クラス変数。新規インスタンスごとに自動的にIDを割り当てるカウンタ
     
     # カルマンフィルタ関連パラメータ
-    # 初期共分散行列の倍率（初期状態の不確実性）
+    # 初期共分散行列の倍率(初期状態の不確実性)
     KALMAN_INITIAL_COVARIANCE = 10.0    # 初期位置から観測位置まで距離があるため、初期共分散の重要性は低い→調整不要！固定値でOK
 
     # 観測ノイズ : ピクセル単位、検出精度に依存
     KALMAN_OBSERVATION_NOISE = 15.0     # 使用するモデル依存のため、設置現場ごとに調整の予定はない
     """ 調整指針:
         5.0～15.0: 高品質なYOLO、SSD等
-        15.0～30.0: 一般的な検出器（推奨範囲）
+        15.0～30.0: 一般的な検出器(推奨範囲)
     """
 
     # プロセスノイズ : 小さい値：モデル重視、大きい値：観測重視
     KALMAN_PROCESS_NOISE = 0.3          # 今回用途が通路に対する人流カウントのため、概ね予測可能な動きのハズ。大きく変更の必要性はない
     """ 調整指針:
-        0.1～0.5: 予測可能な動き（大人の歩行等）
-        0.5～1.0: 一般的な用途（推奨範囲）
+        0.1～0.5: 予測可能な動き(大人の歩行等)
+        0.5～1.0: 一般的な用途(推奨範囲)
         1.0～   : 急な方向転換など非常に予測困難な動き場合
     """
 
@@ -376,27 +266,27 @@ class Person:
         Person.next_id += 1
 
         self.box = box                          # 最新バウンディングボックス
-        self.trajectory = [self.get_center()]   # tracking用: 中心座標履歴（初期値は現フレーム）
+        self.trajectory = [self.get_center()]   # tracking用: 中心座標履歴(初期値は現フレーム)
         self.first_seen = time.time()           # 初回検出時刻
-        self.last_seen = time.time()            # 最終検出時刻（trackingロスト検出等に使用）
-        self.crossed_direction = None           # 線をまたいだ向き（用途次第・初期値None）
+        self.last_seen = time.time()            # 最終検出時刻(trackingロスト検出等に使用)
+        self.crossed_direction = None           # 線をまたいだ向き(用途次第・初期値None)
         self.lost_start_time = None             # トラッキングロストが始まった時刻
         self.lost_last_box = None               # ロスト時の最後のバウンディングボックス
 
-        # Kalmanフィルタ初期化（人物の位置・速度を推定するため）
+        # Kalmanフィルタ初期化(人物の位置・速度を推定するため)
         cx, cy = self.get_center()
         
-        # 4次元状態ベクトル（位置x,y + 速度dx,dy）、2次元観測ベクトル（位置x,yのみ観測可能）
+        # 4次元状態ベクトル(位置x,y + 速度dx,dy)、2次元観測ベクトル(位置x,yのみ観測可能)
         self.kf = KalmanFilter(dim_x=4, dim_z=2)
         
         # 初期状態: [x座標, y座標, x方向速度, y方向速度]
-        # 速度は初期値0で設定（静止状態から開始と仮定）
+        # 速度は初期値0で設定(静止状態から開始と仮定)
         self.kf.x = np.array([cx, cy, 0, 0])  
         
         # 状態遷移行列F: 等速直線運動モデル
-        # 次の状態 = 現在位置 + 速度×時間（時間間隔=1フレーム）
+        # 次の状態 = 現在位置 + 速度×時間(時間間隔=1フレーム)
         # x(t+1) = x(t) + dx(t), y(t+1) = y(t) + dy(t)
-        # dx(t+1) = dx(t), dy(t+1) = dy(t) （速度は一定と仮定）
+        # dx(t+1) = dx(t), dy(t+1) = dy(t) (速度は一定と仮定)
         self.kf.F = np.array([
             [1,0,1,0],  # x(t+1) = x(t) + dx(t)
             [0,1,0,1],  # y(t+1) = y(t) + dy(t)
@@ -450,7 +340,7 @@ class Person:
         self.kf.update([obs_cx, obs_cy])
         self.trajectory.append((obs_cx, obs_cy))  # 軌跡に現フレーム中心値を追加
 
-        # 履歴数制限：最大30件のみ保持（古い順にpopで削除）
+        # 履歴数制限：最大30件のみ保持(古い順にpopで削除)
         if len(self.trajectory) > 30:
             self.trajectory.pop(0)
         self.last_seen = time.time()               # 最終確認時刻を更新
@@ -526,7 +416,7 @@ class PeopleCounter:
 
     def get_counts(self):
         """
-        期間中（最後に保存してから現在まで）の人数カウントを取得。
+        期間中(最後に保存してから現在まで)の人数カウントを取得。
 
         Returns: dict: {"right_to_left": n, "left_to_right": m}
         """
@@ -595,15 +485,26 @@ class PeopleFlowManager:
     人物検出・追跡・人数カウント・ライン横断判定・可視化の全体管理クラス。
     1フレームごとに検出〜追跡〜カウント〜描画〜ログ〜定期保存までを一元管理する。
     """
+    @dataclass
+    class MatchingResult:
+        """マッチング結果を格納するデータクラス"""
+        matched_people: List
+        used_detections: Set[int]
+        used_people: Set[int]
 
-    def __init__(self, config, rtsp, counter, directoryInfo, intrinsics, camera, parameters):
+    @dataclass
+    class RecoveryResult:
+        """復帰処理結果を格納するデータクラス"""
+        recovered: bool
+        detection_index: Optional[int]
+
+    def __init__(self, config, loop, counter, directoryInfo, intrinsics, camera, parameters):
         """
         クラス各種ハンドル・設定値を初期化。
 
         Args:
             config: アプリ全体設定
-            rtsp: RTSP配信用オブジェクト
-            counter: 人数カウンタ（PeopleCounterインスタンス）
+            counter: 人数カウンタ(PeopleCounterインスタンス)
             directoryInfo: 保存ディレクトリ・出力プリフィックス等の設定
             intrinsics: カメラ・モデルの内部パラメータ
             camera: カメラデバイスへのアクセス用インスタンス
@@ -611,24 +512,57 @@ class PeopleFlowManager:
         """
         self.active_people = []     # 現在追跡中の人物リスト
         self.lost_people = []       # 一時追跡ロスト中の人物リスト
-        self.rtsp = rtsp
         self.counter = counter
         self.directoryInfo = directoryInfo
         self.last_log_time = time.time()
         self.config = config
+        self.loop = loop
         self.intrinsics = intrinsics
         self.camera = camera
         self.parameters = parameters
         self.image_saved = False    # 起動時の一度きりの画像保存用
+        self.running = True
+        self.render_queue = queue.Queue(maxsize=5)
+        self.frame_skip_counter = 0
+        self.render_skip_rate = 3
+
+        # スレッドを起動
+        self.render_thread = threading.Thread(
+            target=self._start_render_worker, 
+            daemon=True
+            )
+        self.render_thread.start()
+        print("PeopleFlowManager initialized successfully")
+    
+    def _start_render_worker(self):
+        """レンダーワーカーのエントリーポイント"""
+        self._render_worker()
+    
+    def _render_worker(self):
+        """別スレッドでレンダリング処理を実行"""
+        print("Render worker started")
+        while self.running:
+            try:
+                render_data = self.render_queue.get(timeout=1.0)
+                if render_data is None:  # 終了シグナル
+                    break
+                self._render_frame(render_data)
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"Render worker error: {e}")
+                import traceback
+                traceback.print_exc()
+        print("Render worker stopped")
 
     @staticmethod
     def _calculate_iou(box1, box2):
         """
-        IOU（交差率）を計算する関数
-        「左上隅・幅・高さ（[x, y, w, h]）」形式の矩形2つからIoUを算出します。
-        IoU（Intersection over Union）とは、物体検出モデルが予測したバウンディングボックスと
-        正解バウンディングボックス（アノテーション）との重なり具合を評価する指標です。
-        戻り値は「2つの矩形がどれくらい重なっているかの割合（0〜1）」
+        IOU(交差率)を計算する関数
+        「左上隅・幅・高さ([x, y, w, h])」形式の矩形2つからIoUを算出します。
+        IoU(Intersection over Union)とは、物体検出モデルが予測したバウンディングボックスと
+        正解バウンディングボックス(アノテーション)との重なり具合を評価する指標です。
+        戻り値は「2つの矩形がどれくらい重なっているかの割合(0〜1)」
         +-----------+
         | box1      |
         |   +-------|-------+
@@ -641,7 +575,7 @@ class PeopleFlowManager:
             box1 (list): [x, y, w, h]
             box2 (list): [x, y, w, h]
 
-        Returns: float: IoU値（0.0〜1.0）
+        Returns: float: IoU値(0.0〜1.0)
         """
         # box1, box2 のフォーマット: [x, y, w, h]
         x1, y1, w1, h1 = box1
@@ -656,13 +590,13 @@ class PeopleFlowManager:
         box1_tlbr = [x1, y1, x1 + w1, y1 + h1]
         box2_tlbr = [x2, y2, x2 + w2, y2 + h2]
 
-        # 2つの矩形の共通部分（交差領域）の座標を求める
+        # 2つの矩形の共通部分(交差領域)の座標を求める
         x_intersect_min = max(box1_tlbr[0], box2_tlbr[0])
         y_intersect_min = max(box1_tlbr[1], box2_tlbr[1])
         x_intersect_max = min(box1_tlbr[2], box2_tlbr[2])
         y_intersect_max = min(box1_tlbr[3], box2_tlbr[3])
 
-        # 交差領域の幅と高さを計算（重なりがなければ0となる）
+        # 交差領域の幅と高さを計算(重なりがなければ0となる)
         intersect_w = max(0, x_intersect_max - x_intersect_min)
         intersect_h = max(0, y_intersect_max - y_intersect_min)
         intersection_area = intersect_w * intersect_h
@@ -671,8 +605,8 @@ class PeopleFlowManager:
         box1_area = w1 * h1
         box2_area = w2 * h2
 
-        # IoU（交差率）を計算
-        # IoU = 共通領域（intersection）/ 全領域（union）
+        # IoU(交差率)を計算
+        # IoU = 共通領域(intersection)/ 全領域(union)
         union_area = box1_area + box2_area - intersection_area
         iou = intersection_area / union_area if union_area > 0 else 0.0
 
@@ -680,42 +614,75 @@ class PeopleFlowManager:
 
     def _track_people(self, active_people, lost_people, detections, frame_id, center_line_x):
         """
-        検出結果（detections）と既存追跡リスト（active_people）をマッチングし更新。
+        検出結果(detections)と既存追跡リスト(active_people)をマッチングし更新。
         ハンガリアン法＋IoU＋中心距離＋方向ペナルティで追跡管理。
         一時的なロスト復帰、完全ロスト削除も管理。
-
+        new_active_peopleの中身は
+            # 1. 初期マッチングで更新された active_people (既存オブジェクト)
+            # 2. ロストから復帰した lost_people (既存オブジェクト)
+            # 3. どの既存人物とも対応付けられなかった新規検出 (新しいオブジェクト)
         Args:
             active_people (list): 現在追跡中の人物リスト
             lost_people (list): 一時ロスト中人物リスト
             detections (list[Detection]): 今フレームの検出結果リスト
             frame_id: フレームID
             center_line_x: ラインカウント座標
-
+            
         Returns: tuple: (new_active_people, new_lost_people)
         """
-        num_people = len(active_people)
-        num_detections = len(detections)
-
         # 検出結果も追跡対象もいない場合はそのまま返す
-        if num_detections == 0 and num_people == 0:
+        if not detections and not active_people:
             return [], lost_people
-
-        # 新しい検出結果がない場合、既存の追跡対象は維持（ただし後にタイムアウトで削除される）
-        if num_detections == 0:
+        if not detections:
+            return active_people, lost_people
+        if not active_people:
+            return [Person(det.box) for det in detections], lost_people
+        
+        # メインの追跡処理
+        try:
+            return self._perform_tracking(active_people, lost_people, detections, frame_id, center_line_x)
+        except Exception as e:
+            self._log_tracking_error(e, frame_id, active_people, detections)
             return active_people, lost_people
 
-        # 追跡対象がいない場合、全ての検出を新しい人物とする
-        if num_people == 0:
-            return [Person(det.box) for det in detections], lost_people
+    def _perform_tracking(self, active_people, lost_people, detections, frame_id, center_line_x):
+        """メインの追跡処理を実行"""
+        # コスト行列の作成
+        cost_matrix = self._build_cost_matrix(active_people, detections)
+        
+        # マッチング不可能な場合の処理
+        if not self._is_matching_feasible(cost_matrix):
+            return active_people, lost_people
+        
+        # ハンガリアン法によるマッチング実行
+        matched_pairs = self._execute_hungarian_matching(cost_matrix)
+        
+        # マッチング結果の処理
+        tracking_result = self._process_matching_results(
+            active_people, detections, matched_pairs, cost_matrix
+        )
+        
+        # ロスト人物の管理
+        updated_lost_people = self._manage_lost_people(
+            active_people, lost_people, detections, tracking_result, center_line_x
+        )
+        
+        # 新規人物の追加
+        final_active_people = self._add_new_people(
+            tracking_result.matched_people, detections, tracking_result.used_detections
+        )
+        
+        return final_active_people, updated_lost_people
 
-        # コスト行列を作成
-        # 行: active_people, 列: detections
-        # コストは小さいほど良い。マッチング不可能なペアには大きな値 (inf) を設定
+    def _build_cost_matrix(self, active_people, detections):
+        """コスト行列を構築"""
+        num_people = len(active_people)
+        num_detections = len(detections)
         cost_matrix = np.full((num_people, num_detections), np.inf)
-
+        
         # コスト行列を計算するループ
-        # 既存の追跡ターゲット（active_people）と新たな検出結果（detections）との間で、
-        # 各組み合わせペアごとに「重なり具合（IoU）」と「中心間距離」を算出し、総合的なコストを定義。
+        # 既存の追跡ターゲット(active_people)と新たな検出結果(detections)との間で、
+        # 各組み合わせペアごとに「重なり具合(IoU)」と「中心間距離」を算出し、総合的なコストを定義。
         for i, person in enumerate(active_people):
             # ------- カルマンフィルタによる次フレーム位置予測を実行 -------
             # この呼び出しで Kalman フィルタの内部状態 (self.kf.x) が次フレームの状態に更新される
@@ -725,188 +692,401 @@ class PeopleFlowManager:
             # ------- 予測ボックスを取得 -------
             # get_predicted_box は、predict() で更新された self.kf.x を参照して予測ボックスを作成する
             predicted_box = person.get_predicted_box()
-
-            # ------- 検出結果（detections）とコスト計算 -------
+            
+            # ------- 検出結果(detections)とコスト計算 -------
             for j, detection in enumerate(detections):
-                detection_box = detection.box
-                # 検出ボックスの中心座標（x, y）を計算
-                detection_center = (
-                    detection_box[0] + detection_box[2] // 2,   # 検出boxの中心x
-                    detection_box[1] + detection_box[3] // 2    # 検出boxの中心y
+                cost = self._calculate_matching_cost(
+                    person, detection, predicted_center, predicted_box
                 )
+                cost_matrix[i, j] = cost
+        
+        return cost_matrix
 
-                # --- 距離・IoU計算 ---
-                # 【距離】予測中心点と検出中心点とのユークリッド距離（ピクセル単位）
-                distance = np.sqrt(
-                    (predicted_center[0] - detection_center[0]) ** 2 +
-                    (predicted_center[1] - detection_center[1]) ** 2
-                )
-                # 【IoU】予測ボックスと検出boxのIoU（重なり率：0~1）
-                iou = self._calculate_iou(predicted_box, detection_box)
-                # --- 総合コストの定義 ---
-                # 距離が近くIoUが大きい（よく重なっている）ほどコストが小さくなるよう設計
-                # → IoU大・距離小の組み合わせほどcostは小さい（良いマッチングと見なされる）
-                # 例: 距離200px以上はコスト+1, IoU 1.0→加点ゼロ, IoU 0→+1
-                # ------- コスト計算 -------
-                cost = (1.0 - iou) + (distance / 200.0)  # 200pxを「最大許容距離」とするスケーリング
+    def _calculate_matching_cost(self, person, detection, predicted_center, predicted_box):
+        """個別のマッチングコストを計算"""
+        detection_box = detection.box
+        detection_center = self._get_box_center(detection_box)
+        
+        # --- 距離・IoU計算 ---
+        # 【距離】予測中心点と検出中心点とのユークリッド距離(ピクセル単位)
+        distance = self._calculate_euclidean_distance(predicted_center, detection_center)
+        # DISTANCE_COST_NORMALIZE_PX設定参考要デバック出力
+        # print(f"【距離】予測中心点と検出中心点とのユークリッド距離:{distance}")
+        # 【IoU】予測ボックスと検出boxのIoU(重なり率：0~1)
+        iou = self._calculate_iou(predicted_box, detection_box)
+        # --- 総合コストの定義 ---
+        # 距離が近くIoUが大きい(よく重なっている)ほどコストが小さくなるよう設計
+        # → IoU大・距離小の組み合わせほどcostは小さい(良いマッチングと見なされる)
+        # 例: 距離をdistance_cost_normalize_pxで割った値を加点, IoU 1.0→加点ゼロ, IoU 0→+1
+        # ------- コスト計算 -------
+        base_cost = (1.0 - iou) + (distance / self.parameters.distance_cost_normalize_px)
+        
+        # costにX軸方向の一貫性重視ペナルティ
+        direction_penalty = self._calculate_direction_penalty(person, detection_center)
+        
+        return base_cost + direction_penalty
 
-                # costにX軸方向の一貫性重視ペナルティ
-                avg_motion = person.get_avg_motion()
-                avg_motion_x = avg_motion[0]
-                intended_dir = np.sign(avg_motion_x)
-                actual_dir = np.sign(detection_center[0] - person.trajectory[-1][0])
-                if intended_dir != 0 and actual_dir != 0 and intended_dir != actual_dir:
-                    cost += self.parameters.direction_mismatch_penalty  # 逆方向へのマッチにペナルティを追加
+    def _calculate_direction_penalty(self, person, detection_center):
+        """方向の一貫性に基づくペナルティを計算"""
 
-                cost_matrix[i, j] = cost  # コスト行列の値を格納
+        delta_x = detection_center[0] - person.trajectory[-1][0]
+        # 検出座標の「揺れ」「ノイズ」で頻繁にペナルティが入ってしまうための小さな動きを許容する
+        if abs(delta_x) < self.parameters.direction_stability_margin_px:
+            # print("小さな動きを許容")
+            return 0
 
+        avg_motion = person.get_avg_motion()
+        avg_motion_x = avg_motion[0]
+        if avg_motion_x == 0 or len(person.trajectory) == 0:
+            return 0
+        
+        intended_dir = np.sign(avg_motion_x)
+        actual_dir = np.sign(detection_center[0] - person.trajectory[-1][0])
+        if intended_dir != 0 and actual_dir != 0 and intended_dir != actual_dir:
+            # print("逆方向へのマッチにペナルティを追加")
+            return self.parameters.direction_mismatch_penalty   # 逆方向へのマッチにペナルティを追加
+        
+        return 0
 
-        # コスト行列の全要素がinf or どの行or列も全てinfならreturn
-        if (
-            np.all(np.isinf(cost_matrix)) or 
-            np.any(np.all(np.isinf(cost_matrix), axis=0)) or 
-            np.any(np.all(np.isinf(cost_matrix), axis=1)) or
-            np.sum(np.isfinite(cost_matrix)) < max(cost_matrix.shape)   # 有限値の要素数 < 行or列の大きいほう（マッチングに必要な最小数）なら諦める
-        ):
-            # print("Assignment infeasible: some row or column is all inf.")
-            return active_people, lost_people
-        else:
-            # ハンガリアンアルゴリズムを実行し、最適なマッチングを見つける
-            # matched_person_indices: active_peopleのインデックスの配列
-            # matched_detection_indices: detectionsのインデックスの配列
-            try:
-                matched_person_indices, matched_detection_indices = linear_sum_assignment(cost_matrix)
+    def _is_matching_feasible(self, cost_matrix):
+        """マッチングが実行可能かどうかを判定"""
+        if np.all(np.isinf(cost_matrix)):
+            return False
+        if np.any(np.all(np.isinf(cost_matrix), axis=0)):
+            return False
+        if np.any(np.all(np.isinf(cost_matrix), axis=1)):
+            return False
+        if np.sum(np.isfinite(cost_matrix)) < max(cost_matrix.shape):
+            return False
+        return True
 
-                # マッチング結果を処理
-                new_people = []
-                # マッチした検出結果のインデックスを記録 (初期マッチングで使用されたもの)
-                used_detections = set()
-                used_person = set()
+    def _execute_hungarian_matching(self, cost_matrix):
+        """ハンガリアン法を実行してマッチングペアを取得"""
+        # matched_person_indices: active_peopleのインデックスの配列
+        # matched_detection_indices: detectionsのインデックスの配列
+        matched_person_indices, matched_detection_indices = linear_sum_assignment(cost_matrix)
+        return list(zip(matched_person_indices, matched_detection_indices))
 
-                # コストが高すぎる場合は不一致とみなす
-                # マッチした人物を更新して新しいリストに追加
-                for i, j in zip(matched_person_indices, matched_detection_indices):
-                    # コストがinfの場合は有効なマッチではないのでスキップ (linear_sum_assignmentはinfも考慮する)
-                    if cost_matrix[i, j] < self.parameters.max_acceptable_cost:
-                        person = active_people[i]
-                        detection = detections[j]
-                        person.update(detection.box)
-                        new_people.append(person)
-                        used_person.add(i)       # この人物はマッチに使用された
-                        used_detections.add(j)   # *** この検出結果は初期マッチに使用された ***
-                    else:
-                        # コストが高すぎる場合はマッチとして使用しない
-                        pass # 不一致
+    def _process_matching_results(self, active_people, detections, matched_pairs, cost_matrix):
+        """マッチング結果を処理"""
+        # リスト・セットを初期化
+        matched_people = []      # 正常にマッチした人物のリスト
+        used_detections = set()  # 使用済み検出結果のインデックスセット
+        used_people = set()      # 使用済み人物のインデックスセット
 
-                # マッチしなかったactive_peopleを一時ロストの候補とし、lost_peopleリストへ追加
-                now = time.time()
-                for i, person in enumerate(active_people):
-                    if i not in used_person:
-                        person.lost_start_time = now        # ロスト開始時刻を記録
-                        person.lost_last_box = person.box   # ロスト時のボックスを記録
-                        lost_people.append(person)          # lost_peopleリストに追加
+        # コストが高すぎる場合は不一致とみなす
+        # マッチした人物を更新して新しいリストに追加
+        for person_idx, detection_idx in matched_pairs:
+            cost = cost_matrix[person_idx, detection_idx]   # マッチングペアのコスト(類似度の逆数)を取得
+            
+            # コストが閾値未満の場合のみ有効なマッチとして処理
+            if cost < self.parameters.max_acceptable_cost:
+                # 対応する人物オブジェクトと検出結果を取得
+                person = active_people[person_idx]
+                detection = detections[detection_idx]
+                
+                # 人物の位置情報を検出結果で更新
+                person.update(detection.box)
+                
+                # 処理結果をそれぞれのコレクションに追加
+                matched_people.append(person)           # マッチした人物をリストに追加
+                used_people.add(person_idx)             # 使用済み人物インデックスを記録
+                used_detections.add(detection_idx)      # 使用済み検出結果インデックスを記録
+            else:
+                print(f"costオーバー:{cost}")
+        
+        return self.MatchingResult(matched_people, used_detections, used_people)
 
-                # lost_peopleからも「復帰」判定！
-                recovered = []
-                # ここでは全ての検出結果を見るが、すでにused_detectionsにあるものは復帰には使われないように制御する
-                for j, detection in enumerate(detections): # enumerateでインデックスjも取得
-                    if j in used_detections:
-                        continue # この検出結果は既に初期マッチングで使用されたので、復帰には使わない
+    def _manage_lost_people(self, active_people, lost_people, detections, tracking_result, center_line_x):
+        """ロスト人物の管理(新規ロスト追加、復帰処理、タイムアウト削除)"""
+        current_time = time.time()
+        
+        # 新規ロスト人物の追加
+        updated_lost_people = self._add_newly_lost_people(
+            active_people, lost_people, tracking_result.used_people, current_time
+        )
+        
+        # 復帰処理
+        recovered_people, updated_lost_people, additional_used_detections = self._process_recovery(
+            updated_lost_people, detections, tracking_result.used_detections, 
+            center_line_x, current_time
+        )
+        
+        # 復帰した人物をマッチング結果に追加
+        tracking_result.matched_people.extend(recovered_people)
+        tracking_result.used_detections.update(additional_used_detections)
+        
+        # タイムアウトした人物の削除
+        updated_lost_people = self._remove_timed_out_people(updated_lost_people, current_time)
+        
+        return updated_lost_people
 
-                    # 各ロスト人物に対して復帰可能かチェック
-                    for lost_person in lost_people:
-                        # 一度復帰したlost_personは再度このフレームで復帰させない → recoveredリストで管理
-                        if lost_person in recovered:
-                            continue
+    def _add_newly_lost_people(self, active_people, lost_people, used_people, current_time):
+        """
+        新しくロストした人物をlost_peopleリストに追加する処理。
 
-                        if lost_person.crossed_direction is not None:
-                            continue # このlost_personは既にカウント済みなのでスキップ
+        active_people: 現フレームで追跡中の人物リスト
+        lost_people:      既にロスト状態の人物リスト
+        used_people:      今回対応済のactive_peopleのインデックス集合
+        current_time:     現フレームのタイムスタンプ
 
-                        # ---- 復帰判定の各種条件 ----
-                        # lost_person（見失った人）の中心座標取得
-                        lost_cx, _ = lost_person.get_center()
-                        # detection（新検出）の中心座標取得
-                        det_cx, _ = detection.get_center()
-                        # Kalman Filterの推定速度
-                        avg_dx, avg_dy = lost_person.kf.x[2], lost_person.kf.x[3]
-                        # x方向の検出位置のズレ
-                        diff_x = det_cx - lost_cx
+        - active_peopleのうちまだused_peopleに含まれていないものをロストとして扱い(追跡見失い)、
+        lost_peopleリストに追加する。
+        - 追跡を失った瞬間の時刻・バウンディングボックス情報も記録する。
+        """
+        updated_lost_people = lost_people.copy()  # 元のリストをコピーして編集
 
-                        # lost_personの移動方向と、新たな検出位置の方向が一致しているか？
-                        same_direction = (avg_dx * diff_x > 0)
+        for i, person in enumerate(active_people):
+            if i not in used_people:
+                # この人物は今回新たにロストとみなす
+                print(f"今回新たにロスト:{person.box}")
+                person.lost_start_time = current_time  # ロスト開始時間を記録
+                person.lost_last_box = person.box      # ロスト直前のboxを記録
+                updated_lost_people.append(person)     # ロストリストに追加
 
-                        # ボックス高さの近似条件
-                        lost_height = lost_person.get_box_height()
-                        det_height = detection.get_box_height()
-                        if lost_height == 0:  # ゼロ除算対策
-                            height_ratio = 0
-                        else:
-                            height_ratio = det_height / lost_height
-                        HEIGHT_SIMILARITY_THRESHOLD = 0.90  # 許容する割合
-                        height_similar = (1.0 - HEIGHT_SIMILARITY_THRESHOLD) <= height_ratio <= (1.0 + HEIGHT_SIMILARITY_THRESHOLD)
-
-                        # --- 中心線からの位置条件を移動方向に応じて判定 ---
-                        is_on_correct_side_of_line_within_margin = False
-                        margin = self.parameters.center_line_margin_px
-
-                        if center_line_x is not None: # 中心線が有効な場合のみ判定
-                            if avg_dx > 0: # 右方向に移動している場合 (手前側は左側)
-                                # lost_cxが [center_line_x - margin, center_line_x] の範囲内にあるか
-                                if center_line_x - margin <= lost_cx <= center_line_x:
-                                    is_on_correct_side_of_line_within_margin = True
-                            elif avg_dx < 0: # 左方向に移動している場合 (手前側は右側)
-                                # lost_cxが [center_line_x, center_line_x + margin] の範囲内にあるか
-                                if center_line_x <= lost_cx <= center_line_x + margin:
-                                    is_on_correct_side_of_line_within_margin = True
-
-                        # ── 以下の条件をすべて満たす場合に復帰可能 ──
-                        now_check = time.time() # ここで最新時刻を取得
-                        if (
-                            center_line_x and   # 中心線が有効か
-                            is_on_correct_side_of_line_within_margin and                                        # 中心線から一定範囲（ピクセル）以内か
-                            abs(diff_x) < self.parameters.recovery_distance_px and                              # 失った位置と検出位置が近いか
-                            now_check - lost_person.lost_start_time < self.parameters.active_timeout_sec and    # 見失ってからの秒数が規定以内か
-                            same_direction and  # 進行方向も一致しているか
-                            height_similar      # ボックス高さの類似度
-                        ):
-                            # --- 復帰処理 ---
-                            print(f"recovered:{frame_id}/{lost_person.id}")
-                            lost_person.update(detection.box)       # lost_personの情報を新しい検出で更新
-                            new_people.append(lost_person)          # 新規・復帰リストに追加 (既存のPersonオブジェクト)
-                            recovered.append(lost_person)           # 復帰済みリストに追加
-                            used_detections.add(j)                  # *** この検出結果は復帰に使用されたので、新規人物作成には使わない！ ***
-                            break                                   # この検出結果で1つのロスト人物が復帰したら、他のロスト人物との比較は終了
-
-                # 復帰したlost_peopleをlost_peopleリストから除く
-                lost_people = [p for p in lost_people if p not in recovered]
-
-                # 完全ロスト判定
-                # ロスト開始時刻から規定時間以上経過した人物をlost_peopleから除く
-                now_final = time.time() # 最終的な時刻チェック
-                lost_people = [p for p in lost_people if now_final - p.lost_start_time < self.parameters.active_timeout_sec]
+        return updated_lost_people
 
 
-                # マッチしなかった (used_detectionsに含まれていない) 新しい検出結果を新しい人物としてリストに追加
-                # ここでは、初期マッチングにも復帰にも使われなかった検出結果のみが対象となる
-                for j, detection in enumerate(detections):
-                    if j not in used_detections:                    #  used_detectionsには初期マッチと復帰に使用された検出結果が含まれている
-                        new_people.append(Person(detection.box))    # 新しい人物を作成 (新しいPersonオブジェクト)
 
-                # new_people の中身は
-                # 1. 初期マッチングで更新された active_people (既存オブジェクト)
-                # 2. ロストから復帰した lost_people (既存オブジェクト)
-                # 3. どの既存人物とも対応付けられなかった新規検出 (新しいオブジェクト)
-                return new_people, lost_people
+    def _process_recovery(self, lost_people, detections, used_detections, center_line_x, current_time):
+        """
+        ロスト中人物の復帰を試行する処理。
 
-            except Exception as e:
-                print("【Error】ハンガリアン法(マッチング)で例外発生。")
-                print(f"例外内容：{e}")
-                print(f"フレームID: {frame_id}")
-                print(f"コスト行列 shape: {cost_matrix.shape}")
-                print(f"コスト行列の一部: {cost_matrix}")
-                print(f"検出結果一覧: {detections}")
-                print(f"追跡対象一覧: {active_people}")
-                return active_people, lost_people
+        lost_people:      ロスト中の人物リスト
+        detections:       現フレームでの検出結果
+        used_detections:  既に消費済みのdetectionインデックス集合
+        center_line_x:    画面中央位置(人物復帰判定などに使う)
+        current_time:     現フレームの時刻
+
+        - 各ロスト中人物ごとに"_attempt_recovery"を呼び、復帰可能か判定
+        - 復帰できた場合はrecovered_peopleとして結果に加える
+        - 復帰に使ったdetection indexはadditional_used_detectionsに記録
+        - 復帰できなかった人はremaining_lost_peopleに格納
+        """
+        recovered_people = []            # 復帰できた人物
+        additional_used_detections = set()  # 今回新たに消費したdetection index
+        remaining_lost_people = []       # まだ復帰できない人物
+
+        for lost_person in lost_people:
+            recovery_result = self._attempt_recovery(
+                lost_person, detections, used_detections, center_line_x, current_time
+            )
+
+            if recovery_result.recovered:
+                recovered_people.append(lost_person)
+                additional_used_detections.add(recovery_result.detection_index)
+            else:
+                remaining_lost_people.append(lost_person)
+
+        return recovered_people, remaining_lost_people, additional_used_detections
+
+    def _attempt_recovery(self, lost_person, detections, used_detections, center_line_x, current_time):
+        """
+        個々のロスト中人物の復帰を試みる。
+
+        lost_person:       対象のロスト人物オブジェクト
+        detections:        検出結果リスト
+        used_detections:   既に消費済みのdetection index集合
+        center_line_x:     画面中央X位置など
+        current_time:      現在時刻
+
+        - crossed_directionが設定済み(すでに退場した)場合は復帰しない
+        - 使われていないdetectionそれぞれに対し、復帰可能か判定
+        - 復帰条件を満たしたdetectionが見つかればlost_personの状態を更新し、復帰結果として返す
+
+        戻り値:
+            self.RecoveryResult(recovered:bool, detection_index:int or None)
+        """
+        if lost_person.crossed_direction is not None:
+            # すでに出入りが確定した人物は復帰対象外
+            return self.RecoveryResult(False, None)
+
+        for j, detection in enumerate(detections):
+            if j in used_detections:
+                continue  # 既に他人物に使われた検出はスキップ
+
+            if self._can_recover(lost_person, detection, center_line_x, current_time):
+                # 復帰条件判定に合格
+                lost_person.update(detection.box)  # ボックス情報更新など
+                print(f"recovered:{lost_person.id}")
+                return self.RecoveryResult(True, j)
+
+        # 全検出で復帰不可
+        return self.RecoveryResult(False, None)
+
+    def _can_recover(self, lost_person, detection, center_line_x, current_time):
+        """
+        ロスト人物が新しい検出結果で復帰可能かどうかを判定
+        
+        復帰条件：
+        1. 時間条件：ロスト開始から規定時間以内
+        2. 位置条件：ロスト位置と検出位置の距離が許容範囲内
+        3. 方向条件：移動方向の一貫性が保たれている
+        4. 高さ条件：ボックス高さの類似度が許容範囲内
+        5. 中心線条件：中心線に対する位置が移動方向と整合している
+        
+        Args:
+            lost_person: 復帰を試行するロスト人物
+            detection: 復帰候補の検出結果
+            center_line_x: カウントライン座標(Noneの場合は中心線条件をスキップ)
+            current_time: 現在時刻
+            
+        Returns:
+            bool: 復帰可能な場合True、不可能な場合False
+        """
+        # 時間条件チェック
+        if not self._check_time_condition(lost_person, current_time):
+            return False
+        
+        # 位置条件チェック
+        if not self._check_position_condition(lost_person, detection):
+            return False
+        
+        # 方向条件チェック
+        if not self._check_direction_condition(lost_person, detection):
+            return False
+        
+        # 高さ条件チェック
+        if not self._check_height_condition(lost_person, detection):
+            return False
+        
+        # 中心線条件チェック
+        if center_line_x and not self._check_center_line_condition(lost_person, center_line_x):
+            return False
+        
+        # すべての条件を満たした場合、復帰可能と判定
+        return True
+
+    def _check_time_condition(self, lost_person, current_time):
+        """
+        時間条件のチェック：ロスト開始から規定時間以内か
+        
+        Args:
+            lost_person: チェック対象のロスト人物
+            current_time: 現在時刻
+            
+        Returns:
+            bool: 時間条件を満たす場合True
+        """
+        return current_time - lost_person.lost_start_time < self.parameters.active_timeout
+
+    def _check_position_condition(self, lost_person, detection):
+        """
+        位置条件のチェック：ロスト位置と検出位置の距離が許容範囲内か
+        
+        Args:
+            lost_person: チェック対象のロスト人物
+            detection: 復帰候補の検出結果
+            
+        Returns:
+            bool: 位置条件を満たす場合True
+        """
+        lost_cx, _ = lost_person.get_center()
+        det_cx, _ = detection.get_center()
+        diff_x = abs(det_cx - lost_cx)
+        return diff_x < self.parameters.recovery_distance_px
+
+    def _check_direction_condition(self, lost_person, detection):
+        """
+        方向条件のチェック：移動方向の一貫性が保たれているか
+        
+        過去の移動方向と、ロスト位置から検出位置への方向が一致するかを確認
+        
+        Args:
+            lost_person: チェック対象のロスト人物
+            detection: 復帰候補の検出結果
+            
+        Returns:
+            bool: 方向条件を満たす場合True
+        """
+        lost_cx, _ = lost_person.get_center()
+        det_cx, _ = detection.get_center()
+        avg_dx, _ = lost_person.kf.x[2], lost_person.kf.x[3]
+        diff_x = det_cx - lost_cx
+        return avg_dx * diff_x > 0
+
+    def _check_height_condition(self, lost_person, detection):
+        """
+        高さ条件のチェック：ボックス高さの類似度が許容範囲内か
+        
+        同一人物であれば体格(ボックス高さ)は大きく変わらないという前提
+        
+        Args:
+            lost_person: チェック対象のロスト人物
+            detection: 復帰候補の検出結果
+            
+        Returns:
+            bool: 高さ条件を満たす場合True
+        """
+        lost_height = lost_person.get_box_height()
+        det_height = detection.get_box_height()
+        if lost_height == 0:  # ゼロ除算対策
+            return False
+        
+        height_ratio = det_height / lost_height
+        HEIGHT_SIMILARITY_THRESHOLD = 0.95    # 許容する割合
+        return (1.0 - HEIGHT_SIMILARITY_THRESHOLD) <= height_ratio <= (1.0 + HEIGHT_SIMILARITY_THRESHOLD)
+
+    def _check_center_line_condition(self, lost_person, center_line_x):
+        """
+        中心線条件のチェック：中心線に対する位置が移動方向と整合しているか
+        
+        移動方向に応じて、適切な側(手前側)にいるかを確認
+        - 右向き移動：中心線の左側(手前側)にいるべき
+        - 左向き移動：中心線の右側(手前側)にいるべき
+        
+        Args:
+            lost_person: チェック対象のロスト人物
+            center_line_x: カウントラインのX座標
+            
+        Returns:
+            bool: 中心線条件を満たす場合True
+        """
+        lost_cx, _ = lost_person.get_center()
+        avg_dx = lost_person.kf.x[2]
+        margin = self.parameters.center_line_margin_px
+        
+        if avg_dx > 0: # 右方向に移動している場合 (手前側は左側)
+            # lost_cxが [center_line_x - margin, center_line_x] の範囲内にあるか
+            return center_line_x - margin <= lost_cx <= center_line_x
+        elif avg_dx < 0: # 左方向に移動している場合 (手前側は右側)
+            # lost_cxが [center_line_x, center_line_x + margin] の範囲内にあるか
+            return center_line_x <= lost_cx <= center_line_x + margin  # 許容マージン
+        
+        return False
+
+    def _remove_timed_out_people(self, lost_people, current_time):
+        """タイムアウトした人物を削除"""
+        return [
+            person for person in lost_people 
+            if current_time - person.lost_start_time < self.parameters.active_timeout
+        ]
+
+    def _add_new_people(self, matched_people, detections, used_detections):
+        """新規人物を追加"""
+        final_people = matched_people.copy()
+        
+        for j, detection in enumerate(detections):
+            if j not in used_detections:
+                final_people.append(Person(detection.box))
+        
+        return final_people
+
+    def _get_box_center(self, box):
+        """ボックスの中心座標を取得"""
+        return (box[0] + box[2] // 2, box[1] + box[3] // 2)
+
+    def _calculate_euclidean_distance(self, point1, point2):
+        """ユークリッド距離を計算"""
+        return np.sqrt((point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2)
+
+    def _log_tracking_error(self, error, frame_id, active_people, detections):
+        """エラーログを出力"""
+        print("【Error】ハンガリアン法(マッチング)で例外発生。")
+        print(f"例外内容：{error}")
+        print(f"フレームID: {frame_id}")
+        print(f"追跡対象数: {len(active_people)}, 検出結果数: {len(detections)}")
+
 
     def _check_line_crossing(self, person, center_line_x, frame=None):
         """中央ラインを横切ったかチェック"""
@@ -919,109 +1099,254 @@ class PeopleFlowManager:
         for i in range(1, len(person.trajectory)):
             prev_x = person.trajectory[i-1][0]
             curr_x = person.trajectory[i][0]
+            
             # 左→右: 中央線を未満→以上で通過
             if min(prev_x, curr_x) < center_line_x <= max(prev_x, curr_x):
                 # ラインをどちら方向にまたいだか判定
                 if prev_x < center_line_x:
-                    person.crossed_direction = "left_to_right"
-                    # デバッグモードで画像を保存
-                    if self.parameters.debug_mode and frame is not None:
-                        modules.save_debug_image(frame, person, center_line_x, "left_to_right", self.directoryInfo.debug_images_dir, self.directoryInfo.output_prefix)
-
-                    return "left_to_right"
+                    if self.parameters.count_direction in (CountDirection.LEFT_TO_RIGHT, CountDirection.BOTH):
+                        person.crossed_direction = "left_to_right"
+                        return "left_to_right"
                 # 右→左: 中央線を以上→未満で通過
                 else:
-                    person.crossed_direction = "right_to_left"
-                    # デバッグモードで画像を保存
-                    if self.parameters.debug_mode and frame is not None:
-                        modules.save_debug_image(frame, person, center_line_x, "right_to_left", self.directoryInfo.debug_images_dir, self.directoryInfo.output_prefix)
-
-                    return "right_to_left"
+                    if self.parameters.count_direction in (CountDirection.RIGHT_TO_LEFT, CountDirection.BOTH):
+                        person.crossed_direction = "right_to_left"
+                        return "right_to_left"
+        return None
 
     def process_frame(self, request):
         """フレームごとの処理を行うコールバック関数"""
+        # フレームデータとメタデータの取得
+        frame, metadata, frame_id = self._extract_frame_data(request)
+        start_time = time.time()
+        # 検出処理
+        detection_start = time.time()
+        detections = self._get_detections(metadata)
+        detection_time = time.time() - detection_start
+    
+        # 人物追跡の更新
+        frame_height, frame_width = frame.shape[:2]
+        center_line_x = frame_width // 2
+        
+        tracking_start = time.time()
+        self._update_tracking(detections, frame_id, center_line_x)
+        tracking_time = time.time() - tracking_start
+
+        # フレーム落ち判定
+        frame_threshold = 0.033  # 33ms = 30FPSの場合
+        total_time = time.time() - start_time
+        
+        if detection_time > frame_threshold:
+            print(f"[WARNING] Detection処理でフレーム落ち発生: {detection_time:.3f}s (frame_id: {frame_id})")
+        
+        if tracking_time > frame_threshold:
+            print(f"[WARNING] Tracking処理でフレーム落ち発生: {tracking_time:.3f}s (frame_id: {frame_id})")
+        
+        if total_time > frame_threshold:
+            print(f"[WARNING] 全体処理でフレーム落ち発生: {total_time:.3f}s (frame_id: {frame_id})")
+        
+
+        # レンダリング用データをキューに追加(非ブロッキング)
+        self._queue_render_data(request, frame_height, frame_width, center_line_x, frame_id)
+
+        # ライン横断チェックとカウント更新
+        self._process_line_crossings(center_line_x, frame)
+
+        # 定期処理(ログ出力、データ保存、古いトラッキング削除)は別スレッドで実行
+        threading.Thread(target=self._handle_periodic_tasks, daemon=True).start()
+
+    def _queue_render_data(self, request, frame_height, frame_width, center_line_x, frame_id):
+        """レンダリング用データをキューに追加"""
+        self.frame_skip_counter += 1
+        
+        # フレームスキップ制御
+        if self.frame_skip_counter % self.render_skip_rate == 0:
+            # active_peopleのスナップショットを作成
+            active_people_snapshot = []
+            for person in self.active_people:
+                person_copy = type('Person', (), {})()  # オブジェクトコピー
+                person_copy.id = person.id
+                person_copy.box = person.box
+                person_copy.trajectory = person.trajectory.copy() if hasattr(person, 'trajectory') else []
+                person_copy.crossed_direction = getattr(person, 'crossed_direction', None)
+                active_people_snapshot.append(person_copy)
+            
+            render_data = {
+                'request': request,
+                'frame_height': frame_height,
+                'frame_width': frame_width,
+                'center_line_x': center_line_x,
+                'frame_id': frame_id,
+                'active_people': active_people_snapshot,
+                'counter_snapshot': self.counter.get_total_counts().copy(),
+                'image_saved': self.image_saved
+            }
+            
+            try:
+                self.render_queue.put_nowait(render_data)
+            except queue.Full:
+                # キューが満杯の場合は古いデータを破棄
+                try:
+                    self.render_queue.get_nowait()
+                    self.render_queue.put_nowait(render_data)
+                except:
+                    pass
+
+    def _extract_frame_data(self, request):
+        """フレームデータとメタデータを抽出"""
         with MappedArray(request, 'main') as m:
             frame = m.array.copy()
         # メタデータを取得
         metadata = request.get_metadata()
         # SensorTimestampをframe_idに利用
-        frame_id = metadata.get('SensorTimestamp')
+        frame_id = metadata.get('SensorTimestamp') if metadata else None
+        
+        return frame, metadata, frame_id
+
+    def _get_detections(self, metadata):
+        """検出処理を実行"""
         if metadata is None:
             # print("メタデータがNoneです") # デバッグ用
             # メタデータがない場合でも、既存のactive_peopleはタイムアウトで削除する必要があるため処理を進める
             # ただし検出処理はスキップ
-            detections = []
-        else:
-            # 検出処理
-            detections = Detection.parse_detections(metadata, self.parameters, self.intrinsics, self.camera.imx500, self.camera.picam2, )
+            return []
+        
+        # 検出処理
+        return Detection.parse_detections(
+            metadata, 
+            self.parameters, 
+            self.intrinsics, 
+            self.camera.imx500, 
+            self.camera.picam2
+        )
 
-        # 人物追跡を更新
-        frame_height, frame_width = frame.shape[:2]
-        center_line_x = frame_width // 2
-        self.active_people, self.lost_people = self._track_people(self.active_people, self.lost_people, detections, frame_id, center_line_x)
+    def _update_tracking(self, detections, frame_id, center_line_x):
+        """人物追跡を更新"""
+        self.active_people, self.lost_people = self._track_people(
+            self.active_people, 
+            self.lost_people, 
+            detections, 
+            frame_id, 
+            center_line_x
+        )
+        
+        # デバッグ用チェック
         if not isinstance(self.active_people, list):
             print(f"track_people returned : {type(self.active_people)}")
 
-        with MappedArray(request, 'main') as m:
-            # 起動時の画像を一度だけ保存
-            if not self.image_saved:
-                modules.save_image_at_startup(m.array, center_line_x, self.directoryInfo.date_dir, self.directoryInfo.output_prefix)
-                self.image_saved = True
-
-            # 中央ラインを描画
-            cv2.line(m.array, (center_line_x, 0), (center_line_x, frame_height), 
-                    (255, 255, 0), 2)
-
-            # CENTER_LINE_MARGINを描画
-            center_line_margin_px = self.parameters.center_line_margin_px
-            cv2.line(m.array, (center_line_x - center_line_margin_px, 0), (center_line_x - center_line_margin_px, frame_height), 
-                    (0, 128, 255), 2)
-            cv2.line(m.array, (center_line_x + center_line_margin_px, 0), (center_line_x + center_line_margin_px, frame_height), 
-                    (0, 128, 255), 2)
-
-            # 人物の検出ボックスと軌跡を描画
-            for person in self.active_people:
-                x, y, w, h = person.box
-                
-                # 人物の方向によって色を変える
-                if person.crossed_direction == "left_to_right":
-                    color = (0, 128, 0)  # 緑: 左から右
-                elif person.crossed_direction == "right_to_left":
-                    color = (0, 0, 255)  # 赤: 右から左
-                else:
-                    color = (255, 255, 255)  # 白: まだカウントされていない
-                
-                # 検出ボックスを描画
-                cv2.rectangle(m.array, (x, y), (x + w, y + h), color, 2)
-                
-                # ID表示
-                cv2.putText(m.array, f"ID: {person.id}", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                # ボックスの高さ表示
-                cv2.putText(m.array, f"H: {int(h)}", (x, y + h + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                # 軌跡を描画
-                if len(person.trajectory) > 1:
-                    for i in range(1, len(person.trajectory)):
-                        cv2.line(m.array, person.trajectory[i-1], person.trajectory[i], color, 2)
+    def _render_frame(self, render_data):
+        """非同期でフレームに描画処理を実行"""
+        try:
+            # _render_frameの処理を非同期化
+            request         = render_data['request']
+            frame_height    = render_data['frame_height']
+            frame_width     = render_data['frame_width']
+            center_line_x   = render_data['center_line_x']
+            frame_id        = render_data['frame_id']
             
-            # カウント情報を表示
-            total_counts = self.counter.get_total_counts()
-            cv2.putText(m.array, f"right_to_left: {total_counts['right_to_left']}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            cv2.putText(m.array, f"left_to_right: {total_counts['left_to_right']}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 128, 0), 2)
-            # 時刻とフレームIDを表示
-            text_str = f"FrameID: {frame_id} / {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            cv2.putText(m.array, text_str, (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            with MappedArray(request, 'main') as m:
+                # 起動時の画像を一度だけ保存
+                if not render_data['image_saved'] and not self.image_saved:
+                    self._handle_startup_image_save(m.array, center_line_x)
+                    self.image_saved = True
+                    
+                # 描画
+                self._draw_center_lines(m.array, center_line_x, frame_height)
+                
+                # active_peopleのスナップショットを使用して描画
+                self._draw_people_tracking(m.array, render_data['active_people'])
+                
+                # カウント情報の描画(スナップショットを使用)
+                self._draw_count_info(m.array, frame_id, render_data['counter_snapshot'])
+                
+        except Exception as e:
+            print(f"Render error: {e}")
 
-            frame = m.array.copy()  # デバッグ画像保存用
-            # ========== RTSP非同期配信 ==========
-            if self.rtsp.rtsp_server_ip != 'None' and self.rtsp.ffmpeg_proc and self.rtsp.ffmpeg_proc.stdin:
-                frame_for_rtsp = m.array
-                # BGRA→BGR変換
-                if frame_for_rtsp.shape[2] == 4:
-                    frame_for_rtsp = cv2.cvtColor(frame_for_rtsp, cv2.COLOR_BGRA2BGR)
-                self.rtsp.send_frame_for_rtsp(frame_for_rtsp)
-            # ===================================
+    def _handle_startup_image_save(self, array, center_line_x):
+        """起動時の画像保存処理"""
+        modules.save_image_at_startup(
+            array, 
+            center_line_x, 
+            self.directoryInfo.date_dir, 
+            self.directoryInfo.output_prefix
+        )
 
-        # ラインを横切った人をカウント
+    def _draw_center_lines(self, array, center_line_x, frame_height):
+        """中央ラインとマージンラインを描画"""
+        # 中央ライン
+        cv2.line(array, (center_line_x, 0), (center_line_x, frame_height), (255, 255, 0), 2)
+        
+        # CENTER_LINE_MARGINを描画
+        margin = self.parameters.center_line_margin_px
+        left_margin_x = center_line_x - margin
+        right_margin_x = center_line_x + margin
+        
+        cv2.line(array, (left_margin_x, 0), (left_margin_x, frame_height), (0, 128, 255), 2)
+        cv2.line(array, (right_margin_x, 0), (right_margin_x, frame_height), (0, 128, 255), 2)
+
+    def _draw_people_tracking(self, array, active_people_snapshot):
+        """人物の検出ボックスと軌跡を描画"""
+        for person in active_people_snapshot:
+            color = self._get_person_color(person)
+            self._draw_person_box(array, person, color)
+            self._draw_person_trajectory(array, person, color)
+
+    def _get_person_color(self, person):
+        """人物の方向に基づいて色を決定"""
+        color_map = {
+            "left_to_right": GREEN,
+            "right_to_left": RED,
+        }
+        return color_map.get(person.crossed_direction, (255, 255, 255))  # デフォルト: 白
+
+    def _draw_person_box(self, array, person, color):
+        """人物の検出ボックスと情報を描画"""
+        x, y, w, h = person.box
+        
+        # 検出ボックス
+        cv2.rectangle(
+            array,
+            (int(x), int(y)),
+            (int(x + w), int(y + h)),
+            color,
+            2
+        )
+        
+        # ID表示
+        cv2.putText(array, f"ID: {person.id}", (int(x), int(y - 10)), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        # ボックスの高さ表示
+        cv2.putText(array, f"H: {int(h)}", (int(x), int(y + h + 15)), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+    def _draw_person_trajectory(self, array, person, color):
+        """人物の軌跡を描画"""
+        if len(person.trajectory) > 1:
+            for i in range(1, len(person.trajectory)):
+                cv2.line(array, person.trajectory[i-1], person.trajectory[i], color, 2)
+
+    def _draw_count_info(self, array, frame_id, counter_snapshot):
+        """カウント情報と時刻を描画"""
+        y_pos = 30  # 描画位置の初期値
+        if self.parameters.count_direction == CountDirection.RIGHT_TO_LEFT or self.parameters.count_direction == CountDirection.BOTH:
+            cv2.putText(array, f"right_to_left: {counter_snapshot['right_to_left']}", 
+                        (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.7, RED, 2)
+            y_pos += 30  # 次の行へ
+
+        if self.parameters.count_direction == CountDirection.LEFT_TO_RIGHT or self.parameters.count_direction == CountDirection.BOTH:
+            cv2.putText(array, f"left_to_right: {counter_snapshot['left_to_right']}", 
+                        (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.7, GREEN, 2)
+            y_pos += 30  # 次の行へ
+
+        # 時刻とフレームID
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        text_str = f"FrameID: {frame_id} / {timestamp}"
+        cv2.putText(array, text_str, (10, y_pos), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+
+    def _process_line_crossings(self, center_line_x, frame):
+        """ライン横断チェックとカウント更新"""
         for person in self.active_people:
             # 少なくとも2フレーム以上の軌跡がある人物が対象
             if len(person.trajectory) >= 2:
@@ -1029,34 +1354,58 @@ class PeopleFlowManager:
                 if direction:
                     self.counter.update(direction)
 
-        # --- アクティブ人物リスト整理 ---
-        # 古いトラッキング対象を削除 (last_seen が TRACKING_TIMEOUT を超えたもの)
+    def _handle_periodic_tasks(self):
+        """定期処理(ログ出力、データ保存、古いトラッキング削除)"""
         current_time = time.time()
-        self.active_people = [p for p in self.active_people if current_time - p.last_seen < self.parameters.tracking_timeout]
+        
+        # 古いトラッキング対象を削除 (last_seen が TRACKING_TIMEOUT を超えたもの)
+        self._cleanup_old_tracking(current_time)
+        
+        # 定期ログ出力
+        self._handle_periodic_logging(current_time)
+        
+        # データ保存
+        self._handle_periodic_saving(current_time)
 
-        # 定期的なログ出力
-        if current_time - self.last_log_time >= self.parameters.log_interval:
+    def _cleanup_old_tracking(self, current_time):
+        """古いトラッキング対象を削除"""
+        self.active_people = [
+            p for p in self.active_people 
+            if current_time - p.last_seen < self.parameters.tracking_timeout
+        ]
+
+    def _handle_periodic_logging(self, current_time):
+        """定期的なログ出力"""
+        interval = self.parameters.status_update_interval
+        if interval <= 0:
+            # 出力しない
+            return
+        if current_time - self.last_log_time >= interval:
             self.last_log_time = current_time
-            total_counts = self.counter.get_total_counts()
-            elapsed = int(current_time - self.counter.last_save_time)
-            remaining = max(0, int(self.parameters.counting_interval - elapsed)) # 負にならないように
-            print(f"--- Status Update ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) ---")
-            print(f"Active tracking: {len(self.active_people)} people")
-            print(f"Counts - Period (R->L: {self.counter.right_to_left}, L->R: {self.counter.left_to_right})")
-            print(f"Counts - Total (R->L: {total_counts['right_to_left']}, L->R: {total_counts['left_to_right']})")
-            print(f"Next save in: {remaining} seconds")
-            print(f"--------------------------------------------------")
+            self._log_status_update(current_time)
 
-        # 指定間隔ごとにJSONファイルに保存
-        if current_time - self.counter.last_save_time >= self.parameters.counting_interval:
+    def _log_status_update(self, current_time):
+        """ステータス更新ログを出力"""
+        total_counts = self.counter.get_total_counts()
+        elapsed = int(current_time - self.counter.last_save_time)
+        remaining = max(0, int(self.parameters.count_data_output_interval - elapsed))
+        
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        print(f"--- Status Update ({timestamp}) ---")
+        print(f"Active tracking: {len(self.active_people)} people")
+        print(f"Counts - Period (R->L: {self.counter.right_to_left}, L->R: {self.counter.left_to_right})")
+        print(f"Counts - Total (R->L: {total_counts['right_to_left']}, L->R: {total_counts['left_to_right']})")
+        print(f"Next save in: {remaining} seconds")
+        print("--------------------------------------------------")
+
+    def _handle_periodic_saving(self, current_time):
+        """指定間隔ごとにカウントデータをJSONファイルに保存"""
+        if current_time - self.counter.last_save_time >= self.parameters.count_data_output_interval:
             self.counter.save_to_json()
 
 # ======= メイン処理 =======
-if __name__ == "__main__":
-    # コマンドライン引数のパーサを作成
-    parser = argparse.ArgumentParser(description="IMX500 AIカメラモジュール制御")
-    parser.add_argument('--preview', action='store_true', help='プレビュー画面を表示する')
-    args = parser.parse_args()
+def camera_main(stop_event, args, loop):
     # 各種パラメータ設定
     parameters = Parameter(MODEL_PATH)
 
@@ -1066,7 +1415,7 @@ if __name__ == "__main__":
         imx500 = IMX500(parameters.model_path)
         intrinsics = imx500.network_intrinsics
 
-        # intrinsics（ネットワーク情報）の検証
+        # intrinsics(ネットワーク情報)の検証
         if not intrinsics:
             intrinsics = NetworkIntrinsics()
             intrinsics.task = "object detection"  # デフォルトでオブジェクト検出タスクとする
@@ -1077,7 +1426,7 @@ if __name__ == "__main__":
         # ラベル未設定時はCOCOデータセット用のラベルをロード
         if intrinsics.labels is None:
             try:
-                # assets/coco_labels.txtのパスを決定（実行ディレクトリからの相対パス）
+                # assets/coco_labels.txtのパスを決定(実行ディレクトリからの相対パス)
                 label_path = os.path.join(os.path.dirname(__file__), "assets/coco_labels.txt")
                 with open(label_path, "r") as f:
                     intrinsics.labels = f.read().splitlines()
@@ -1119,36 +1468,69 @@ if __name__ == "__main__":
 
     # 各種パラメータクラス初期化
     camera = Camera(picam2, imx500)
-    rtsp = RTSP(parameters.rtsp_server_ip, parameters.rtsp_server_port, intrinsics)
-    directoryInfo = DirectoryInfo(parameters.output_dir, parameters.camera_name, parameters.debug_images_subdir_name)
-    directoryInfo.makedir(parameters.debug_mode)
+    directoryInfo = DirectoryInfo(parameters.count_data_output_dir, parameters.camera_name)
+    directoryInfo.makedir()
     counter = PeopleCounter(directoryInfo)
 
     # フレーム毎に呼ばれるコールバックをPeopleFlowManagerで設定
-    manager = PeopleFlowManager(config, rtsp, counter, directoryInfo, intrinsics, camera, parameters)
+    manager = PeopleFlowManager(config, loop, counter, directoryInfo, intrinsics, camera, parameters)
     picam2.pre_callback = manager.process_frame
 
-    print(f"人流カウント開始 - {parameters.counting_interval}秒ごとにデータを保存します")
-    print(f"ログは{parameters.log_interval}秒ごとに出力されます")
+    print(f"人流カウント開始 - {parameters.count_data_output_interval}秒ごとにデータを保存します")
+    if parameters.status_update_interval > 0:
+        print(f"ログは{parameters.status_update_interval}秒ごとに出力されます")
+    else:
+        print("ログは出力されません")
     print("Ctrl+Cで終了します")
     
     try:
-        # メインループ - コールバックにて処理されるためループ内は待機のみ
-        while True:
-            time.sleep(0.01)  # CPU使用率抑制
-
-    except KeyboardInterrupt:
-        print("終了中...")
-        # 最後のデータを保存
-        counter.save_to_json()
-
+        while not stop_event.is_set():
+            time.sleep(0.01)
+    except Exception as e:
+        print("カメラメイン例外:", e)
     finally:
-        # カメラ停止とリソース解放
         try:
-            if 'picam2' in locals() and picam2: # picam2が初期化されているか確認
+            counter.save_to_json()
+            if 'picam2' in locals() and picam2:
                 picam2.stop()
                 picam2.close()
                 print("カメラを停止しました")
             print("プログラムを終了します")
         except Exception as e:
             print(f"終了処理エラー: {e}")
+
+async def main():
+    stop_event = threading.Event()
+    # コマンドライン引数のパーサを作成
+    parser = argparse.ArgumentParser(description="IMX500 AIカメラモジュール制御")
+    parser.add_argument('--preview', action='store_true', help='プレビュー画面を表示する')
+    args = parser.parse_args()
+
+    loop = asyncio.get_running_loop()  # ここでloopを取得
+    # カメラスレッド起動時にloopを渡す
+    cam_thread = threading.Thread(target=camera_main, args=(stop_event, args, loop), daemon=True)
+    cam_thread.start()
+    
+    try:
+        # メインループ 
+        while cam_thread.is_alive() and not stop_event.is_set():
+            await asyncio.sleep(0.1)  # CPUを他の処理に譲る
+        
+    except KeyboardInterrupt:
+        print("[async main] Ctrl+Cキャッチ、停止イベントセット")
+    finally:
+        # 確実に停止処理を実行
+        stop_event.set()
+        print("[async main] カメラスレッドの終了を待機中...")
+        cam_thread.join(timeout=5.0)  # タイムアウトを設定
+        if cam_thread.is_alive():
+            print("[async main] 警告: カメラスレッドがタイムアウト内に終了しませんでした")
+        else:
+            print("[async main] カメラスレッド終了を確認")
+        print("[async main] メインスレッドの終了処理完了")
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("プログラムを中断しました")
