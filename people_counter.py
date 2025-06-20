@@ -1192,28 +1192,6 @@ class PeopleFlowManager:
                 except:
                     pass
 
-    def _start_render_worker(self):
-        """レンダーワーカーのエントリーポイント"""
-        self._render_worker()
-    
-    def _render_worker(self):
-        """別スレッドでレンダリング処理を実行"""
-        print("Render worker started")
-        while self.running:
-            try:
-                render_data = self.render_queue.get(timeout=1.0)
-                if render_data is None:  # 終了シグナル
-                    break
-                self._render_frame(render_data)
-            except queue.Empty:
-                continue
-            except Exception as e:
-                print(f"Render worker error: {e}")
-                import traceback
-                traceback.print_exc()
-        print("Render worker stopped")
-
-
     def _extract_frame_data(self, request):
         """フレームデータとメタデータを抽出"""
         with MappedArray(request, 'main') as m:
