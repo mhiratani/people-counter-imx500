@@ -28,34 +28,33 @@ sudo apt upgrade -y
 ```
 
 # 必要なシステムパッケージのインストール
-1. カメラが付いている側
 
 ```bash
 sudo apt install -y python3-pip python3-venv git cmake build-essential \
     libatlas-base-dev libhdf5-dev libhdf5-serial-dev libjpeg-dev \
     libopenjp2-7-dev python3-picamera2 imx500-all
 ```
-
-2. 解析専用・カメラを使わない
-
+#### GUIもインストールしたラズパイの場合はシステム版opencvを使用する
 ```bash
-sudo apt install -y python3-pip python3-venv git cmake build-essential \
-    libatlas-base-dev libhdf5-dev libhdf5-serial-dev libjpeg-dev \
-    libopenjp2-7-dev
+sudo apt install python3-opencv
 ```
 
 ### 2. Python環境構築
 
+#### 仮想環境の作成と有効化
 ```bash
-# 仮想環境の作成と有効化
 python3 -m venv venv --system-site-packages
 source venv/bin/activate
+```
 
-# 基本パッケージのインストール
+#### パッケージのインストール
+```bash
 pip install --upgrade pip wheel setuptools
-
-# 必要なライブラリのインストール
-pip install numpy opencv-python-headless
+pip install -r requirements.txt
+```
+#### GUIをインストールしてない場合はpip版opencvを使用する
+```bash
+pip install opencv-python
 ```
 
 ### 3. IMX500モデルの確認
