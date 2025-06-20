@@ -1,34 +1,34 @@
+# 標準ライブラリ
 import argparse
+import asyncio
 import json
 import os
-import sys
-import time
-from datetime import datetime
-import numpy as np
-from scipy.optimize import linear_sum_assignment    # scipyの線形割当アルゴリズム
-from dataclasses import dataclass
-from typing import Optional, Set, List
-from enum import Enum, auto
 import queue
+import sys
 import threading
-import asyncio
-# グローバルでQueue用意 
-frame_queue = asyncio.Queue(maxsize=5)
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum, auto
+from typing import List, Optional, Set
 
-# NMS(Non-Maximum Suppression)適用
+# サードパーティライブラリ
+import cv2
+import numpy as np
 import torch
-from torchvision.ops import nms
-
+from filterpy.kalman import KalmanFilter
 from picamera2 import MappedArray, Picamera2
 from picamera2.devices import IMX500
-from picamera2.devices.imx500 import (NetworkIntrinsics, postprocess_nanodet_detection)
+from picamera2.devices.imx500 import NetworkIntrinsics, postprocess_nanodet_detection
 from picamera2.devices.imx500.postprocess import scale_boxes
+from scipy.optimize import linear_sum_assignment
+from torchvision.ops import nms
+
+# ローカルモジュール
 import modules
 
-# 描画設定
-import cv2
-
-from filterpy.kalman import KalmanFilter
+# グローバル変数
+frame_queue = asyncio.Queue(maxsize=5)
 
 # モデル設定
 # https://www.raspberrypi.com/documentation/accessories/ai-camera.html の
