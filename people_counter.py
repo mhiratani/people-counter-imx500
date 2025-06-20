@@ -19,10 +19,6 @@ from picamera2.devices.imx500.postprocess import scale_boxes
 
 import modules
 
-# ffmpegによるRTSP配信プロセス用
-import queue
-import threading
-import subprocess
 
 # 描画設定
 import cv2
@@ -57,8 +53,6 @@ class Parameter:
         self.output_dir                 = self.config.get('OUTPUT_DIR', 'people_count_data')    # ログデータを保存するディレクトリ名
         self.debug_mode                 = str(self.config.get('DEBUG_MODE', 'False')).lower() == 'true'
         self.debug_images_subdir_name   = self.config.get('DEBUG_IMAGES_SUBDIR_NAME', 'debug_images')
-        self.rtsp_server_ip             = self.config.get('RTSP_SERVER_IP', 'None')             # RTSP配信先IPアドレス
-        self.rtsp_server_port           = 8554
         self.log_interval               = 10
 
     def _load_config(self, path):
@@ -77,123 +71,6 @@ class Parameter:
 
         return camera_name
 
-class RTSP:
-    """
-    フレームデータをffmpeg経由でRTSPサーバへ配信するためのクラス。
-    フレームは内部キューに蓄積し、別スレッドでffmpegに逐次書き込む。
-    """
-    def __init__(self, rtsp_server_ip, rtsp_server_port, intrinsics, frame_queue_size=3):
-        """
-        コンストラクタ
-
-        Args:
-            rtsp_server_ip (str): RTSPサーバIPアドレス
-            rtsp_server_port (int): RTSPサーバポート
-            intrinsics : 画像・動画フレームの内部パラメータ（推論レートなどを保持）
-            frame_queue_size (int): 内部フレームキューの最大長（デフォルト: 3）
-        """
-        self.rtsp_server_ip = rtsp_server_ip
-        self.rtsp_server_port = rtsp_server_port
-        # ffmpegに送信するフレームの一時保持用キュー。overflow時は古いものから削除。
-        self.frame_queue = queue.Queue(maxsize=frame_queue_size)
-        # ffmpegプロセスの起動と設定
-        self.ffmpeg_proc = self.rtsp_setting(intrinsics)
-        # ffmpegプロセスへデータを書き込むスレッドの起動
-        self.rtsp_thread = self.start_rtsp_thread(self.ffmpeg_proc)
-        self.active = True  # 配信中フラグ
-        self.message = False  # 配信停止メッセージ出力フラグ
-
-    def rtsp_writer_thread(self, ffmpeg_proc):
-        """
-        フレームキューからフレームを取り出してffmpeg stdinへ書き込む無限ループスレッド。
-        Args: ffmpeg_proc (subprocess.Popen): 起動済みffmpegプロセス
-        """
-        while True:
-            frame = self.frame_queue.get()
-            try:
-                # フレームデータをバイト列へ変換してffmpegへ入力
-                ffmpeg_proc.stdin.write(frame.astype(np.uint8).tobytes())
-            except Exception as e:
-                print(f"[RTSP配信エラー]: {e}")
-                self.active = False  # 配信停止
-            finally:
-                self.frame_queue.task_done()
-
-    def start_rtsp_thread(self, ffmpeg_proc):
-        """
-        ffmpegへのフレーム書き込み専用スレッドを起動
-        Args: ffmpeg_proc (subprocess.Popen): 起動済みffmpegプロセス
-        Returns: threading.Thread: 起動したデーモンスレッド
-        """
-        t = threading.Thread(target=self.rtsp_writer_thread, args=(ffmpeg_proc,), daemon=True)
-        t.start()
-        return t
-
-    def send_frame_for_rtsp(self, frame):
-        """
-        キューにフレームを追加（キューが満杯なら古いフレームを捨てて新しいフレームを必ず入れる）
-
-        Args:
-            frame (np.ndarray): 配信したいフレーム
-        """
-        if not self.active:
-            if not self.message:
-                print("RTSP配信は既に停止しています")
-                self.message  = True
-            return
-        try:
-            if self.frame_queue.full():
-                try:
-                    self.frame_queue.get_nowait()  # 古いデータを非同期で破棄
-                except queue.Empty:
-                    pass
-            self.frame_queue.put_nowait(frame)
-        except queue.Full:
-            pass  # 想定外の複数同時処理はスキップ
-
-    def rtsp_setting(self, intrinsics):
-        """
-        RTSP配信用のffmpegプロセスを起動・設定
-        Args: intrinsics: 推論時の内部パラメータ（フレームレート取得に利用）
-        Returns: subprocess.Popen | str: ffmpegプロセス（または異常時は空文字列）
-        """
-        # 初期値。失敗時などはこのまま返す。
-        ffmpeg_proc = ''  
-        if self.rtsp_server_ip != 'None':
-            # 解像度やフレームレート等の設定
-            FRAME_WIDTH  = 640
-            FRAME_HEIGHT = 480
-            FRAME_RATE = int(intrinsics.inference_rate) if hasattr(intrinsics, 'inference_rate') else 15
-            RTSP_URL = f"rtsp://{self.rtsp_server_ip}:{self.rtsp_server_port}/stream"
-
-            # ffmpegプロセス起動用コマンド
-            ffmpeg_cmd = [
-                "ffmpeg",
-                "-nostats",
-                "-loglevel", "error", 
-                "-re",
-                "-f", "rawvideo",
-                "-pix_fmt", "bgr24",
-                "-s", f"{FRAME_WIDTH}x{FRAME_HEIGHT}",
-                "-r", str(FRAME_RATE),
-                "-i", "-",              # 入力：標準入力
-                "-an",                  # 音声なし
-                "-c:v", "libx264",
-                "-preset", "ultrafast", # 低遅延
-                "-tune", "zerolatency",
-                "-f", "rtsp",
-                RTSP_URL
-            ]
-            try:
-                ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
-                print("ffmpegによるRTSP配信プロセス起動")
-            except Exception as e:
-                print(f"ffmpeg起動失敗: {e}")
-                sys.exit(1)
-        else:
-            print(f"RTSP_SERVER_IPが未指定のためRTSP配信は行いません")
-
-        return ffmpeg_proc
 
 class DirectoryInfo:
     def __init__(self, output_dir, output_prefix, debug_images_subdir_name):
@@ -596,13 +473,12 @@ class PeopleFlowManager:
     1フレームごとに検出〜追跡〜カウント〜描画〜ログ〜定期保存までを一元管理する。
     """
 
-    def __init__(self, config, rtsp, counter, directoryInfo, intrinsics, camera, parameters):
+    def __init__(self, config, counter, directoryInfo, intrinsics, camera, parameters):
         """
         クラス各種ハンドル・設定値を初期化。
 
         Args:
             config: アプリ全体設定
-            rtsp: RTSP配信用オブジェクト
             counter: 人数カウンタ（PeopleCounterインスタンス）
             directoryInfo: 保存ディレクトリ・出力プリフィックス等の設定
             intrinsics: カメラ・モデルの内部パラメータ
@@ -611,7 +487,6 @@ class PeopleFlowManager:
         """
         self.active_people = []     # 現在追跡中の人物リスト
         self.lost_people = []       # 一時追跡ロスト中の人物リスト
-        self.rtsp = rtsp
         self.counter = counter
         self.directoryInfo = directoryInfo
         self.last_log_time = time.time()
@@ -1012,14 +887,6 @@ class PeopleFlowManager:
             cv2.putText(m.array, text_str, (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
             frame = m.array.copy()  # デバッグ画像保存用
-            # ========== RTSP非同期配信 ==========
-            if self.rtsp.rtsp_server_ip != 'None' and self.rtsp.ffmpeg_proc and self.rtsp.ffmpeg_proc.stdin:
-                frame_for_rtsp = m.array
-                # BGRA→BGR変換
-                if frame_for_rtsp.shape[2] == 4:
-                    frame_for_rtsp = cv2.cvtColor(frame_for_rtsp, cv2.COLOR_BGRA2BGR)
-                self.rtsp.send_frame_for_rtsp(frame_for_rtsp)
-            # ===================================
 
         # ラインを横切った人をカウント
         for person in self.active_people:
@@ -1119,13 +986,12 @@ if __name__ == "__main__":
 
     # 各種パラメータクラス初期化
     camera = Camera(picam2, imx500)
-    rtsp = RTSP(parameters.rtsp_server_ip, parameters.rtsp_server_port, intrinsics)
     directoryInfo = DirectoryInfo(parameters.output_dir, parameters.camera_name, parameters.debug_images_subdir_name)
     directoryInfo.makedir(parameters.debug_mode)
     counter = PeopleCounter(directoryInfo)
 
     # フレーム毎に呼ばれるコールバックをPeopleFlowManagerで設定
-    manager = PeopleFlowManager(config, rtsp, counter, directoryInfo, intrinsics, camera, parameters)
+    manager = PeopleFlowManager(config, counter, directoryInfo, intrinsics, camera, parameters)
     picam2.pre_callback = manager.process_frame
 
     print(f"人流カウント開始 - {parameters.counting_interval}秒ごとにデータを保存します")
