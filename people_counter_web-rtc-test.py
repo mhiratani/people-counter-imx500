@@ -60,27 +60,27 @@ class Parameter:
         self.camera_name                = self._get_cameraname()
         self.model_path                  = model_path
         self.person_class_id            = 0     # 人物クラスのID(通常COCOデータセットでは0)
-        direction_str                   = self.config.get('COUNT_DIRECTION','BOTH')             # カウントしたい人の移動方向の指定
+        direction_str                   = self.config.get('COUNT_DIRECTION','BOTH')             # カウント対象となる人物の移動方向を指定する
         try:
             self.count_direction = CountDirection[direction_str]    # 取得した文字列をEnumに変換
         except KeyError:
             self.count_direction = CountDirection.BOTH
-        self.detection_threshold        = self.config.get('DETECTION_THRESHOLD')                # 検出器が出力する「検出信頼度スコア」の下限値。これ未満は無視する。
         self.iou_threshold              = self.config.get('IOU_THRESHOLD',)                     # NMS(非最大抑制)で、検出ボックス同士の重なり(IoU)がこの値を超えた場合に低信頼度側を除去するためのしきい値
-        self.max_detections             = self.config.get('MAX_DETECTIONS',)                    # 1フレームで扱う検出結果の最大数。これ以上は間引きされるか無視される
-        self.center_line_margin_px      = self.config.get('CENTER_LINE_MARGIN_PX')              # ライン中心から±何ピクセルを「ライン近傍」とみなすかの閾値(ピクセル数)
-        self.recovery_distance_px       = self.config.get('RECOVERY_DISTANCE_PX')               # 過去の人物と新しい検出の中心座標(x)の距離が 何ピクセル以内なら「同一人物が復帰した」とみなすかの閾値
-        self.tracking_timeout           = self.config.get('TRACKING_TIMEOUT')                   # 人物を追跡し続ける最大時間(秒)
-        self.active_timeout             = self.config.get('ACTIVE_TIMEOUT')                     # lost_people保持猶予(秒)
-        self.distance_cost_normalize_px = self.config.get('DISTANCE_COST_NORMALIZE_PX')         # 距離正規化用(px)距離をこの値で割った値をコストとする
-        self.direction_stability_margin_px = self.config.get('DIRECTION_STABILITY_MARGIN_PX')   # 検出座標の「揺れ」「ノイズ」で頻繁に逆方向へのマッチに与える追加コストが入ってしまうため指定した範囲(px)を許容する
-        self.direction_mismatch_penalty = self.config.get('DIRECTION_MISMATCH_PENALTY')         # 逆方向へのマッチに与える追加コスト
+        self.max_detections             = self.config.get('MAX_DETECTIONS',)                    # 1フレームで取り扱う検出結果の最大数_個
+        self.detection_threshold        = self.config.get('DETECTION_THRESHOLD')                # 検出器が出力する「検出信頼度スコア」の下限値
+        self.min_box_height_px          = self.config.get('MIN_BOX_HEIGHT_PX')                  # 許容する人物検出ボックス最小高さ_px
+        self.max_box_height_px          = self.config.get('MAX_BOX_HEIGHT_PX')                  # 許容する人物検出ボックス最大高さ_px
+        self.center_line_margin_px      = self.config.get('CENTER_LINE_MARGIN_PX')              # ライン近傍とする絶対値距離_px
+        self.recovery_distance_px       = self.config.get('RECOVERY_DISTANCE_PX')               # 復帰条件の上限距離_px
+        self.tracking_timeout           = self.config.get('TRACKING_TIMEOUT')                   # active_peopleのうち、最後に認識してから追跡をやめるまでの時間_秒
+        self.active_timeout             = self.config.get('ACTIVE_TIMEOUT')                     # CENTER_LINE_MARGIN_PX内で見失った人物の保持猶予時間_秒
+        self.distance_cost_normalize_px = self.config.get('DISTANCE_COST_NORMALIZE_PX')         # 距離正規化用_px
+        self.direction_stability_margin_px = self.config.get('DIRECTION_STABILITY_MARGIN_PX')   # 検出座標の揺れ、ノイズの許容範囲_px
+        self.direction_mismatch_penalty = self.config.get('DIRECTION_MISMATCH_PENALTY')         # 逆方向マッチ時の追加コスト_px
         self.max_acceptable_cost        = self.config.get('MAX_ACCEPTABLE_COST')                # 最大許容コスト
-        self.min_box_height_px          = self.config.get('MIN_BOX_HEIGHT_PX')                  # 人物ボックスの高さフィルタ。これより小さいBoxは排除(ピクセル)
-        self.max_box_height_px          = self.config.get('MAX_BOX_HEIGHT_PX')                  # 人物ボックスの高さフィルタ。これより大きいBoxは排除(ピクセル)
-        self.count_data_output_interval = self.config.get('COUNT_DATA_OUTPUT_INTERVAL')         # カウントデータ(JSONファイル)を出力して保存する間隔(秒)
+        self.count_data_output_interval = self.config.get('COUNT_DATA_OUTPUT_INTERVAL')         # カウントデータ(JSONファイル)を出力して保存する間隔_秒
         self.count_data_output_dir      = self.config.get('COUNT_DATA_OUTPUT_DIR')              # 出力されたカウントデータ(JSONファイル)の保存ディレクトリ名
-        self.status_update_interval     = self.config.get('STATUS_UPDATE_INTERVAL')             # 定期ログ出力の間隔(秒)
+        self.status_update_interval     = self.config.get('STATUS_UPDATE_INTERVAL')             # 定期ログ出力間隔_秒
 
     def _load_config(self, path):
         with open(path, 'r') as f:
