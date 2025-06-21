@@ -392,7 +392,7 @@ class PeopleCounter:
     """
     人の通過方向をカウントし、累積/期間ごとの人数カウント管理・データ保存を担当するクラス。
     """
-    def __init__(self, directoryInfo):
+    def __init__(self, directoryInfo, count_direction):
         self.right_to_left = 0          # 右→左の期間カウンタ
         self.left_to_right = 0          # 左→右の期間カウンタ
         self.total_right_to_left = 0    # 右→左の累積カウンタ
@@ -400,6 +400,7 @@ class PeopleCounter:
         self.start_time = time.time()   # カウント開始時刻
         self.last_save_time = time.time()   # 最後に保存した時刻
         self.directoryInfo = directoryInfo  # 保存パス
+        self.count_direction = count_direction  # カウント対象となる人物の移動方向
 
     def update(self, direction):
         """
@@ -418,23 +419,27 @@ class PeopleCounter:
         """
         期間中(最後に保存してから現在まで)の人数カウントを取得。
 
-        Returns: dict: {"right_to_left": n, "left_to_right": m}
+        Returns: dict: {"right_to_left": n, "left_to_right": m} もしくは必要な方向のみ
         """
-        return {
-            "right_to_left": self.right_to_left,
-            "left_to_right": self.left_to_right,
-        }
+        result = {}
+        if self.count_direction in (CountDirection.LEFT_TO_RIGHT, CountDirection.BOTH):
+            result["left_to_right"] = self.left_to_right
+        if self.count_direction in (CountDirection.RIGHT_TO_LEFT, CountDirection.BOTH):
+            result["right_to_left"] = self.right_to_left
+        return result
 
     def get_total_counts(self):
         """
         累積の人数カウントを取得。
 
-        Returns: dict: {"right_to_left": n_total, "left_to_right": m_total}
+        Returns: dict: {"right_to_left": n_total, "left_to_right": m_total} もしくは必要な方向のみ
         """
-        return {
-            "right_to_left": self.total_right_to_left,
-            "left_to_right": self.total_left_to_right,
-        }
+        result = {}
+        if self.count_direction in (CountDirection.LEFT_TO_RIGHT, CountDirection.BOTH):
+            result["left_to_right"] = self.total_left_to_right
+        if self.count_direction in (CountDirection.RIGHT_TO_LEFT, CountDirection.BOTH):
+            result["right_to_left"] = self.total_right_to_left
+        return result
 
     def save_to_json(self):
         """
@@ -1394,8 +1399,18 @@ class PeopleFlowManager:
         
         print(f"--- Status Update ({timestamp}) ---")
         print(f"Active tracking: {len(self.active_people)} people")
-        print(f"Counts - Period (R->L: {self.counter.right_to_left}, L->R: {self.counter.left_to_right})")
-        print(f"Counts - Total (R->L: {total_counts['right_to_left']}, L->R: {total_counts['left_to_right']})")
+        if self.parameters.count_direction == CountDirection.BOTH:
+            print(f"Counts - Period (R->L: {self.counter.right_to_left}, L->R: {self.counter.left_to_right})")
+            print(f"Counts - Total (R->L: {total_counts['right_to_left']}, L->R: {total_counts['left_to_right']})")
+        elif self.parameters.count_direction == CountDirection.LEFT_TO_RIGHT:
+            print(f"Counts - Period (L->R: {self.counter.left_to_right})")
+            print(f"Counts - Total (L->R: {total_counts['left_to_right']})")
+        elif self.parameters.count_direction == CountDirection.RIGHT_TO_LEFT:
+            print(f"Counts - Period (R->L: {self.counter.right_to_left})")
+            print(f"Counts - Total (R->L: {total_counts['right_to_left']})")
+        else:
+            print("Invalid count_direction setting.")
+
         print(f"Next save in: {remaining} seconds")
         print("--------------------------------------------------")
 
@@ -1470,7 +1485,7 @@ def camera_main(stop_event, args, loop):
     camera = Camera(picam2, imx500)
     directoryInfo = DirectoryInfo(parameters.count_data_output_dir, parameters.camera_name)
     directoryInfo.makedir()
-    counter = PeopleCounter(directoryInfo)
+    counter = PeopleCounter(directoryInfo, parameters.count_direction)
 
     # フレーム毎に呼ばれるコールバックをPeopleFlowManagerで設定
     manager = PeopleFlowManager(config, loop, counter, directoryInfo, intrinsics, camera, parameters)
