@@ -6,7 +6,7 @@ SERVICE_NAME="people-counter-web-rtc"
 HOME_DIR="/home/${CURRENT_USER}"
 PROJECT_DIR="${HOME_DIR}/people-counter-imx500"
 VENV_DIR="${PROJECT_DIR}/venv"
-PYTHON_SCRIPT="${PROJECT_DIR}/people_counter_web-rtc-test.py"
+PYTHON_SCRIPT="${PROJECT_DIR}/people_counter_stream_webRTC.py"
 #------------ 設定ここまで ------------#
 
 # 色

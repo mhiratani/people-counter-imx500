@@ -161,7 +161,7 @@ openssl req -x509 -nodes -newkey rsa:2048 -keyout key.pem -out cert.pem
 python people_counter.py
 
 # プログラム実行(WebRTCで配信したい場合)
-python people_counter_web-rtc-test.py
+python people_counter_stream_webRTC.py
 
 # ラズパイ側で解析しないで、データを流してサーバ側で解析したい場合
 python people_detection_stream.py
