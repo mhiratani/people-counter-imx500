@@ -126,7 +126,7 @@ vim config.json
 python setup.py
 ```
 
-##### カメラ名のルールに付いて
+#### カメラ名のルールに付いて
 - camera で始めてほしい
 - OK例 : `camera1_2024-06-01_001`
 - OK例 : `cameraABC_2024-05-15_999`
