@@ -316,7 +316,7 @@ class Person:
         self.trajectory = [self.get_center()]   # tracking用: 中心座標履歴(初期値は現フレーム)
         self.first_seen = time.time()           # 初回検出時刻
         self.last_seen = time.time()            # 最終検出時刻(trackingロスト検出等に使用)
-        self.crossed_direction = None           # 線をまたいだ向き(用途次第・初期値None)
+        self.crossed_direction = None           # 線をまたいだ向き
         self.lost_start_time = None             # トラッキングロストが始まった時刻
         self.lost_last_box = None               # ロスト時の最後のバウンディングボックス
 
