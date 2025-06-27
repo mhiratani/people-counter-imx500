@@ -1210,19 +1210,20 @@ class PeopleFlowManager:
     def _queue_render_data(self, request, frame_height, frame_width, center_line_x, frame_id):
         """レンダリング用データをキューに追加"""
         self.frame_skip_counter += 1
-        
+
         # フレームスキップ制御
         if self.frame_skip_counter % self.render_skip_rate == 0:
             # active_peopleのスナップショットを作成
             active_people_snapshot = []
-            for person in self.active_people:
+            for p in self.active_people:
                 person_copy = type('Person', (), {})()  # オブジェクトコピー
-                person_copy.id = person.id
-                person_copy.box = person.box
-                person_copy.trajectory = person.trajectory.copy() if hasattr(person, 'trajectory') else []
-                person_copy.crossed_direction = getattr(person, 'crossed_direction', None)
+                person_copy.id = p.id
+                person_copy.box = p.box
+                person_copy.trajectory = p.trajectory.copy() if hasattr(p, 'trajectory') else []
+                person_copy.crossed_direction = getattr(p, 'crossed_direction', None)
+                person_copy.recent_direction = p.get_recent_movement_direction()
                 active_people_snapshot.append(person_copy)
-            
+
             render_data = {
                 'request': request,
                 'frame_height': frame_height,
@@ -1233,7 +1234,7 @@ class PeopleFlowManager:
                 'counter_snapshot': self.counter.get_total_counts().copy(),
                 'image_saved': self.image_saved
             }
-            
+
             try:
                 self.render_queue.put_nowait(render_data)
             except queue.Full:
