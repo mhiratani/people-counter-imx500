@@ -435,6 +435,29 @@ class Person:
         """
         return self.box[3]
 
+    def get_recent_movement_direction(self, window=3, movement_threshold=5.0):
+        """
+        指定した直近フレームでの人物の移動方向を取得
+        
+        Args:
+            window (int): 移動方向を判定する直近フレーム数
+            movement_threshold (float): 明確な移動と判定する最小移動量（ピクセル/フレーム）
+        
+        Returns:
+            str or None: "left_to_right", "right_to_left", または None（移動量が閾値未満の場合）
+        """
+        if len(self.trajectory) < 2:
+            return None
+        
+        avg_dx, avg_dy = self.get_avg_motion(window=window)
+        
+        if avg_dx > movement_threshold:
+            return "left_to_right"
+        elif avg_dx < -movement_threshold:
+            return "right_to_left"
+        
+        return None
+
 class PeopleCounter:
     """
     人の通過方向をカウントし、累積/期間ごとの人数カウント管理・データ保存を担当するクラス。
@@ -1155,12 +1178,13 @@ class PeopleFlowManager:
             # 左→右: 中央線を未満→以上で通過
             if min(prev_x, curr_x) < center_line_x <= max(prev_x, curr_x):
                 # ラインをどちら方向にまたいだか判定
-                if prev_x < center_line_x:
+                recent_direction = person.get_recent_movement_direction()
+                if recent_direction == "left_to_right":
                     if self.parameters.count_direction in (CountDirection.LEFT_TO_RIGHT, CountDirection.BOTH):
                         person.crossed_direction = "left_to_right"
                         return "left_to_right"
                 # 右→左: 中央線を以上→未満で通過
-                else:
+                elif recent_direction == "right_to_left":
                     if self.parameters.count_direction in (CountDirection.RIGHT_TO_LEFT, CountDirection.BOTH):
                         person.crossed_direction = "right_to_left"
                         return "right_to_left"
@@ -1376,6 +1400,20 @@ class PeopleFlowManager:
         # ボックスの高さ表示
         cv2.putText(array, f"H: {int(h)}", (int(x), int(y + h + 15)), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+        # 移動方向表示
+        if person.recent_direction:
+            color_map = {
+                "left_to_right": GREEN,
+                "right_to_left": RED,
+            }
+            
+            direction_color = color_map.get(person.recent_direction, color)
+            direction_text = "left_to_right" if person.recent_direction == "left_to_right" else "right_to_left"
+            
+            # ボックス右下の位置に色付きで表示
+            cv2.putText(array, direction_text, (int(x + w - 20), int(y + h - 10)), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, direction_color, 2)
 
     def _draw_person_trajectory(self, array, person, color):
         """人物の軌跡を描画"""
