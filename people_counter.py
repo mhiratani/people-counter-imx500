@@ -269,7 +269,7 @@ class Person:
         self.trajectory = [self.get_center()]   # tracking用: 中心座標履歴(初期値は現フレーム)
         self.first_seen = time.time()           # 初回検出時刻
         self.last_seen = time.time()            # 最終検出時刻(trackingロスト検出等に使用)
-        self.crossed_direction = None           # 線をまたいだ向き(用途次第・初期値None)
+        self.crossed_direction = None           # 線をまたいだ向き
         self.lost_start_time = None             # トラッキングロストが始まった時刻
         self.lost_last_box = None               # ロスト時の最後のバウンディングボックス
 
@@ -387,6 +387,29 @@ class Person:
         Returns: int
         """
         return self.box[3]
+
+    def get_recent_movement_direction(self, window=3, movement_threshold=5.0):
+        """
+        指定した直近フレームでの人物の移動方向を取得
+        
+        Args:
+            window (int): 移動方向を判定する直近フレーム数
+            movement_threshold (float): 明確な移動と判定する最小移動量（ピクセル/フレーム）
+        
+        Returns:
+            str or None: "left_to_right", "right_to_left", または None（移動量が閾値未満の場合）
+        """
+        if len(self.trajectory) < 2:
+            return None
+        
+        avg_dx, avg_dy = self.get_avg_motion(window=window)
+        
+        if avg_dx > movement_threshold:
+            return "left_to_right"
+        elif avg_dx < -movement_threshold:
+            return "right_to_left"
+        
+        return None
 
 class PeopleCounter:
     """
@@ -1105,18 +1128,28 @@ class PeopleFlowManager:
             prev_x = person.trajectory[i-1][0]
             curr_x = person.trajectory[i][0]
             
-            # 左→右: 中央線を未満→以上で通過
-            if min(prev_x, curr_x) < center_line_x <= max(prev_x, curr_x):
-                # ラインをどちら方向にまたいだか判定
-                if prev_x < center_line_x:
-                    if self.parameters.count_direction in (CountDirection.LEFT_TO_RIGHT, CountDirection.BOTH):
-                        person.crossed_direction = "left_to_right"
-                        return "left_to_right"
-                # 右→左: 中央線を以上→未満で通過
-                else:
-                    if self.parameters.count_direction in (CountDirection.RIGHT_TO_LEFT, CountDirection.BOTH):
-                        person.crossed_direction = "right_to_left"
-                        return "right_to_left"
+            # 左→右へのライン跨ぎ判定
+            # prev_x が中央線より左にあり、かつ curr_x が中央線より右にある場合
+            if prev_x < center_line_x and curr_x >= center_line_x:
+                recent_direction = person.get_recent_movement_direction()
+
+                # recent_direction が "left_to_right" であり、かつカウント対象方向である場合
+                if recent_direction == "left_to_right" and \
+                self.parameters.count_direction in (CountDirection.LEFT_TO_RIGHT, CountDirection.BOTH):
+                    person.crossed_direction = "left_to_right"
+                    return "left_to_right"
+
+            # 右→左へのライン跨ぎ判定
+            # prev_x が中央線より右にあり、かつ curr_x が中央線より左にある場合
+            elif prev_x >= center_line_x and curr_x < center_line_x:
+                recent_direction = person.get_recent_movement_direction()
+
+                # recent_direction が "right_to_left" であり、かつカウント対象方向である場合
+                if recent_direction == "right_to_left" and \
+                self.parameters.count_direction in (CountDirection.RIGHT_TO_LEFT, CountDirection.BOTH):
+                    person.crossed_direction = "right_to_left"
+                    return "right_to_left"
+
         return None
 
     def process_frame(self, request):
@@ -1163,19 +1196,20 @@ class PeopleFlowManager:
     def _queue_render_data(self, request, frame_height, frame_width, center_line_x, frame_id):
         """レンダリング用データをキューに追加"""
         self.frame_skip_counter += 1
-        
+
         # フレームスキップ制御
         if self.frame_skip_counter % self.render_skip_rate == 0:
             # active_peopleのスナップショットを作成
             active_people_snapshot = []
-            for person in self.active_people:
+            for p in self.active_people:
                 person_copy = type('Person', (), {})()  # オブジェクトコピー
-                person_copy.id = person.id
-                person_copy.box = person.box
-                person_copy.trajectory = person.trajectory.copy() if hasattr(person, 'trajectory') else []
-                person_copy.crossed_direction = getattr(person, 'crossed_direction', None)
+                person_copy.id = p.id
+                person_copy.box = p.box
+                person_copy.trajectory = p.trajectory.copy() if hasattr(p, 'trajectory') else []
+                person_copy.crossed_direction = getattr(p, 'crossed_direction', None)
+                person_copy.recent_direction = p.get_recent_movement_direction()
                 active_people_snapshot.append(person_copy)
-            
+
             render_data = {
                 'request': request,
                 'frame_height': frame_height,
@@ -1186,7 +1220,7 @@ class PeopleFlowManager:
                 'counter_snapshot': self.counter.get_total_counts().copy(),
                 'image_saved': self.image_saved
             }
-            
+
             try:
                 self.render_queue.put_nowait(render_data)
             except queue.Full:
@@ -1324,6 +1358,20 @@ class PeopleFlowManager:
         # ボックスの高さ表示
         cv2.putText(array, f"H: {int(h)}", (int(x), int(y + h + 15)), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+        # 移動方向表示
+        if person.recent_direction:
+            color_map = {
+                "left_to_right": GREEN,
+                "right_to_left": RED,
+            }
+            
+            direction_color = color_map.get(person.recent_direction, color)
+            direction_text = "left_to_right" if person.recent_direction == "left_to_right" else "right_to_left"
+            
+            # ボックス右下の位置に色付きで表示
+            cv2.putText(array, direction_text, (int(x + w - 20), int(y + h - 10)), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, direction_color, 2)
 
     def _draw_person_trajectory(self, array, person, color):
         """人物の軌跡を描画"""
