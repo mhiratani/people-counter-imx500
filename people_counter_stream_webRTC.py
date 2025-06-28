@@ -1175,19 +1175,28 @@ class PeopleFlowManager:
             prev_x = person.trajectory[i-1][0]
             curr_x = person.trajectory[i][0]
             
-            # 左→右: 中央線を未満→以上で通過
-            if min(prev_x, curr_x) < center_line_x <= max(prev_x, curr_x):
-                # ラインをどちら方向にまたいだか判定
+            # 左→右へのライン跨ぎ判定
+            # prev_x が中央線より左にあり、かつ curr_x が中央線より右にある場合
+            if prev_x < center_line_x and curr_x >= center_line_x:
                 recent_direction = person.get_recent_movement_direction()
-                if recent_direction == "left_to_right":
-                    if self.parameters.count_direction in (CountDirection.LEFT_TO_RIGHT, CountDirection.BOTH):
-                        person.crossed_direction = "left_to_right"
-                        return "left_to_right"
-                # 右→左: 中央線を以上→未満で通過
-                elif recent_direction == "right_to_left":
-                    if self.parameters.count_direction in (CountDirection.RIGHT_TO_LEFT, CountDirection.BOTH):
-                        person.crossed_direction = "right_to_left"
-                        return "right_to_left"
+
+                # recent_direction が "left_to_right" であり、かつカウント対象方向である場合
+                if recent_direction == "left_to_right" and \
+                self.parameters.count_direction in (CountDirection.LEFT_TO_RIGHT, CountDirection.BOTH):
+                    person.crossed_direction = "left_to_right"
+                    return "left_to_right"
+
+            # 右→左へのライン跨ぎ判定
+            # prev_x が中央線より右にあり、かつ curr_x が中央線より左にある場合
+            elif prev_x >= center_line_x and curr_x < center_line_x:
+                recent_direction = person.get_recent_movement_direction()
+
+                # recent_direction が "right_to_left" であり、かつカウント対象方向である場合
+                if recent_direction == "right_to_left" and \
+                self.parameters.count_direction in (CountDirection.RIGHT_TO_LEFT, CountDirection.BOTH):
+                    person.crossed_direction = "right_to_left"
+                    return "right_to_left"
+
         return None
 
     def process_frame(self, request):
