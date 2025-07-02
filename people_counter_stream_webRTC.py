@@ -77,6 +77,8 @@ class Parameter:
         self.count_data_output_interval = self.config.get('COUNT_DATA_OUTPUT_INTERVAL')         # カウントデータ(JSONファイル)を出力して保存する間隔_秒
         self.count_data_output_dir      = self.config.get('COUNT_DATA_OUTPUT_DIR')              # 出力されたカウントデータ(JSONファイル)の保存ディレクトリ名
         self.status_update_interval     = self.config.get('STATUS_UPDATE_INTERVAL')             # 定期ログ出力間隔_秒
+        self.movement_window            = self.config.get('MOVEMENT_WINDOW', 30)                 # 移動方向判定用の直近フレーム数
+        self.movement_threshold         = self.config.get('MOVEMENT_THRESHOLD', 5.0)            # 明確な移動と判定する最小移動量（ピクセル/フレーム）
 
     def _load_config(self, path):
         with open(path, 'r') as f:
@@ -435,7 +437,7 @@ class Person:
         """
         return self.box[3]
 
-    def get_recent_movement_direction(self, window=3, movement_threshold=5.0):
+    def get_recent_movement_direction(self, window=30, movement_threshold=5.0):
         """
         指定した直近フレームでの人物の移動方向を取得
         
@@ -1178,7 +1180,10 @@ class PeopleFlowManager:
             # 左→右へのライン跨ぎ判定
             # prev_x が中央線より左にあり、かつ curr_x が中央線より右にある場合
             if prev_x < center_line_x and curr_x >= center_line_x:
-                recent_direction = person.get_recent_movement_direction()
+                recent_direction = person.get_recent_movement_direction(
+                    self.parameters.movement_window, 
+                    self.parameters.movement_threshold
+                )
 
                 # recent_direction が "left_to_right" であり、かつカウント対象方向である場合
                 if recent_direction == "left_to_right" and \
@@ -1189,7 +1194,10 @@ class PeopleFlowManager:
             # 右→左へのライン跨ぎ判定
             # prev_x が中央線より右にあり、かつ curr_x が中央線より左にある場合
             elif prev_x >= center_line_x and curr_x < center_line_x:
-                recent_direction = person.get_recent_movement_direction()
+                recent_direction = person.get_recent_movement_direction(
+                    self.parameters.movement_window, 
+                    self.parameters.movement_threshold
+                )
 
                 # recent_direction が "right_to_left" であり、かつカウント対象方向である場合
                 if recent_direction == "right_to_left" and \
@@ -1254,7 +1262,10 @@ class PeopleFlowManager:
                 person_copy.box = p.box
                 person_copy.trajectory = p.trajectory.copy() if hasattr(p, 'trajectory') else []
                 person_copy.crossed_direction = getattr(p, 'crossed_direction', None)
-                person_copy.recent_direction = p.get_recent_movement_direction()
+                person_copy.recent_direction = p.get_recent_movement_direction(
+                    self.parameters.movement_window, 
+                    self.parameters.movement_threshold
+                )
                 active_people_snapshot.append(person_copy)
 
             render_data = {
