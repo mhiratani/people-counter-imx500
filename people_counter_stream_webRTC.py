@@ -77,7 +77,7 @@ class Parameter:
         self.count_data_output_interval = self.config.get('COUNT_DATA_OUTPUT_INTERVAL')         # カウントデータ(JSONファイル)を出力して保存する間隔_秒
         self.count_data_output_dir      = self.config.get('COUNT_DATA_OUTPUT_DIR')              # 出力されたカウントデータ(JSONファイル)の保存ディレクトリ名
         self.status_update_interval     = self.config.get('STATUS_UPDATE_INTERVAL')             # 定期ログ出力間隔_秒
-        self.movement_window            = self.config.get('MOVEMENT_WINDOW', 30)                 # 移動方向判定用の直近フレーム数
+        self.movement_window            = self.config.get('MOVEMENT_WINDOW', 30)                # 移動方向判定用の直近フレーム数
         self.movement_threshold         = self.config.get('MOVEMENT_THRESHOLD', 5.0)            # 明確な移動と判定する最小移動量（ピクセル/フレーム）
         self.trajectory_max_length      = self.config.get('TRAJECTORY_MAX_LENGTH', 30)          # 軌跡の最大保持数
 
