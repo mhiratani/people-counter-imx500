@@ -87,7 +87,10 @@ vim config.json
   "MAX_ACCEPTABLE_COST": 1.5,
   "COUNT_DATA_OUTPUT_INTERVAL": 60,
   "COUNT_DATA_OUTPUT_DIR": "people-count-data",
-  "STATUS_UPDATE_INTERVAL": 15
+  "STATUS_UPDATE_INTERVAL": 15,
+  "MOVEMENT_WINDOW": 30,
+  "MOVEMENT_THRESHOLD": 5.0,
+  "TRAJECTORY_MAX_LENGTH": 60
 }
 ```
 
@@ -112,6 +115,9 @@ vim config.json
 | `COUNT_DATA_OUTPUT_INTERVAL` | 秒 | カウントデータ(JSONファイル)を出力して保存する間隔 | 分析時のカウント単位<br>60秒なら「1分あたりの通過人数」<br>3600秒 (=1時間) なら「1時間あたりの通過人数」として集計される |
 | `COUNT_DATA_OUTPUT_DIR` | - | 出力されたカウントデータ(JSONファイル)の保存ディレクトリ名 | "people-count-data"とか |
 | `STATUS_UPDATE_INTERVAL` | 秒 | 定期ログ出力間隔 | 0または負値で無効 |
+| `MOVEMENT_WINDOW` | フレーム | 移動方向判定用の直近フレーム数<br>人物の移動方向を安定して判定するために使用する過去のフレーム数 | 推奨値: 20～50<br>**大きい値**：より安定した方向判定が可能だが、方向転換への反応が遅くなる<br>**小さい値**：方向転換に素早く反応するが、ノイズの影響を受けやすい |
+| `MOVEMENT_THRESHOLD` | px/フレーム | 明確な移動と判定する最小移動量<br>この値以上の移動があった場合に「明確な移動」として扱う | 推奨値: 3.0～10.0<br>**大きい値**：微細な揺れを無視し安定した判定が可能だが、ゆっくりした移動を見逃す可能性<br>**小さい値**：わずかな移動も検出するが、検出ノイズの影響を受けやすい |
+| `TRAJECTORY_MAX_LENGTH` | 個 | 軌跡の最大保持数<br>人物の移動軌跡を記録する際の最大ポイント数 | 推奨値: 30～100<br>軌跡が長いほど移動パターンの分析精度が向上するが、メモリ使用量が増加<br>フレームレートや処理能力に応じて調整 |
 ---
 
 #### AWSに設定ファイルをバックアップしたい場合
