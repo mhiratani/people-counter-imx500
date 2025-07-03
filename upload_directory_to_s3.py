@@ -99,7 +99,7 @@ if __name__ == "__main__":
 
     script_dir = os.path.dirname(os.path.abspath(__file__)) # カレントディレクトリの取得
     config_path = os.path.join(script_dir, "config.json")   # カレントに"config.json"がある前提
-    upload_dir = aws_access_tools.load_config(config_path)['OUTPUT_DIR']    # S3にアップロードするディレクトリの特定
+    upload_dir = aws_access_tools.load_config(config_path)['COUNT_DATA_OUTPUT_DIR']    # S3にアップロードするディレクトリの特定
     
     # 環境変数から取得した値を使用
     DELETE_AFTER_UPLOAD = os.getenv('DELETE_AFTER_UPLOAD', 'false').lower() == 'true'
