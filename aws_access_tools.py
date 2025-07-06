@@ -2,6 +2,8 @@ import os
 import boto3
 import json
 from botocore.exceptions import ClientError, NoCredentialsError
+from dotenv import load_dotenv
+load_dotenv()
 
 def check_and_get_env_vars(required_vars):
     """
