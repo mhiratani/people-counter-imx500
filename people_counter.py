@@ -73,6 +73,9 @@ class Parameter:
         self.count_data_output_interval = self.config.get('COUNT_DATA_OUTPUT_INTERVAL')         # カウントデータ(JSONファイル)を出力して保存する間隔_秒
         self.count_data_output_dir      = self.config.get('COUNT_DATA_OUTPUT_DIR')              # 出力されたカウントデータ(JSONファイル)の保存ディレクトリ名
         self.status_update_interval     = self.config.get('STATUS_UPDATE_INTERVAL')             # 定期ログ出力間隔_秒
+        self.movement_window            = self.config.get('MOVEMENT_WINDOW', 30)                # 移動方向判定用の直近フレーム数
+        self.movement_threshold         = self.config.get('MOVEMENT_THRESHOLD', 5.0)            # 明確な移動と判定する最小移動量（ピクセル/フレーム）
+        self.trajectory_max_length      = self.config.get('TRAJECTORY_MAX_LENGTH', 30)          # 軌跡の最大保持数
 
     def _load_config(self, path):
         with open(path, 'r') as f:
@@ -255,18 +258,21 @@ class Person:
         1.0～   : 急な方向転換など非常に予測困難な動き場合
     """
 
-    def __init__(self, box):
+    def __init__(self, box, trajectory_max_length=30):
         """
         Personインスタンスを初期化し、ユニークIDを付与。
         カルマンフィルタも初期化。
 
-        Args: box (list or tuple): [x, y, w, h]形式のバウンディングボックス
+        Args: 
+            box (list or tuple): [x, y, w, h]形式のバウンディングボックス
+            trajectory_max_length (int): 軌跡の最大保持数
         """
         self.id = Person.next_id      # 一意なIDを割り振り
         Person.next_id += 1
 
         self.box = box                          # 最新バウンディングボックス
         self.trajectory = [self.get_center()]   # tracking用: 中心座標履歴(初期値は現フレーム)
+        self.trajectory_max_length = trajectory_max_length  # 軌跡の最大保持数
         self.first_seen = time.time()           # 初回検出時刻
         self.last_seen = time.time()            # 最終検出時刻(trackingロスト検出等に使用)
         self.crossed_direction = None           # 線をまたいだ向き
@@ -340,8 +346,8 @@ class Person:
         self.kf.update([obs_cx, obs_cy])
         self.trajectory.append((obs_cx, obs_cy))  # 軌跡に現フレーム中心値を追加
 
-        # 履歴数制限：最大30件のみ保持(古い順にpopで削除)
-        if len(self.trajectory) > 30:
+        # 履歴数制限：設定可能な最大件数のみ保持(古い順にpopで削除)
+        if len(self.trajectory) > self.trajectory_max_length:
             self.trajectory.pop(0)
         self.last_seen = time.time()               # 最終確認時刻を更新
 
@@ -664,7 +670,7 @@ class PeopleFlowManager:
         if not detections:
             return active_people, lost_people
         if not active_people:
-            return [Person(det.box) for det in detections], lost_people
+            return [Person(det.box, self.parameters.trajectory_max_length) for det in detections], lost_people
         
         # メインの追跡処理
         try:
@@ -1096,7 +1102,7 @@ class PeopleFlowManager:
         
         for j, detection in enumerate(detections):
             if j not in used_detections:
-                final_people.append(Person(detection.box))
+                final_people.append(Person(detection.box, self.parameters.trajectory_max_length))
         
         return final_people
 
@@ -1131,7 +1137,10 @@ class PeopleFlowManager:
             # 左→右へのライン跨ぎ判定
             # prev_x が中央線より左にあり、かつ curr_x が中央線より右にある場合
             if prev_x < center_line_x and curr_x >= center_line_x:
-                recent_direction = person.get_recent_movement_direction()
+                recent_direction = person.get_recent_movement_direction(
+                    self.parameters.movement_window, 
+                    self.parameters.movement_threshold
+                )
 
                 # recent_direction が "left_to_right" であり、かつカウント対象方向である場合
                 if recent_direction == "left_to_right" and \
@@ -1142,7 +1151,10 @@ class PeopleFlowManager:
             # 右→左へのライン跨ぎ判定
             # prev_x が中央線より右にあり、かつ curr_x が中央線より左にある場合
             elif prev_x >= center_line_x and curr_x < center_line_x:
-                recent_direction = person.get_recent_movement_direction()
+                recent_direction = person.get_recent_movement_direction(
+                    self.parameters.movement_window, 
+                    self.parameters.movement_threshold
+                )
 
                 # recent_direction が "right_to_left" であり、かつカウント対象方向である場合
                 if recent_direction == "right_to_left" and \
@@ -1207,7 +1219,10 @@ class PeopleFlowManager:
                 person_copy.box = p.box
                 person_copy.trajectory = p.trajectory.copy() if hasattr(p, 'trajectory') else []
                 person_copy.crossed_direction = getattr(p, 'crossed_direction', None)
-                person_copy.recent_direction = p.get_recent_movement_direction()
+                person_copy.recent_direction = p.get_recent_movement_direction(
+                    self.parameters.movement_window, 
+                    self.parameters.movement_threshold
+                )
                 active_people_snapshot.append(person_copy)
 
             render_data = {
