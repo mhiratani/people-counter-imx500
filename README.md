@@ -300,6 +300,111 @@ crontab -e
 0 21 * * 6 sudo systemctl stop people-counter
 ```
 
+## 死活監視
+
+死活監視とパフォーマンス監視のため、システムメトリクスをInfluxDBに送信するスクリプトを用意
+
+### 死活監視システムの概要
+
+`server_metrics_to_influx.py`は以下の情報を定期的に収集し、InfluxDBに送信します：
+
+- **システムメトリクス**
+  - CPU使用率（%）
+  - メモリ使用率（%、使用量）
+  - ディスク使用率（%、使用量）
+- **サービス監視**
+  - アクティブなsystemdサービス一覧
+  - 各サービスの稼働状態
+
+これにより、Grafana等のダッシュボールでリアルタイムの死活監視とパフォーマンス監視が可能になります。
+
+### 必要な環境変数の設定
+
+`.env`ファイルに以下の環境変数を設定してください：
+
+```bash
+# InfluxDB設定
+INFLUX_URL=https://your-influxdb-instance.com/api/v2/write
+INFLUX_TOKEN=your_influxdb_token_here
+INFLUX_ORG=your_organization_name
+INFLUX_BUCKET=your_bucket_name
+```
+
+### セットアップ手順
+
+1. **環境変数ファイルの作成**
+
+```bash
+# .envファイルを作成して上記の環境変数を設定
+vim .env
+```
+
+2. **死活監視サービスの設定**
+
+```bash
+# セットアップスクリプトを実行（実行権限を付与してから実行）
+chmod +x setup_server_metrics_to_influx_service.sh
+./setup_server_metrics_to_influx_service.sh
+```
+
+### 動作確認
+
+```bash
+# タイマーの状態確認
+sudo systemctl status server-metrics-to-influx.timer
+
+# タイマー一覧の確認
+sudo systemctl list-timers
+
+# サービスの手動実行テスト
+sudo systemctl start server-metrics-to-influx.service
+
+# サービスログの確認
+sudo journalctl -u server-metrics-to-influx.service -n 20
+```
+
+### 設定のカスタマイズ
+
+`setup_server_metrics_to_influx_service.sh`内の以下の設定を変更できます：
+
+- `INTERVAL="5min"`: メトリクス送信間隔（デフォルト: 5分）
+  - 例: `"1min"`（1分間隔）、`"10min"`（10分間隔）、`"1h"`（1時間間隔）
+
+### トラブルシューティング
+
+#### InfluxDB接続エラー
+
+```bash
+# 環境変数の確認
+cat .env
+
+# 手動でスクリプトを実行してエラー確認
+source venv/bin/activate
+python server_metrics_to_influx.py
+```
+
+#### サービスが動作しない場合
+
+```bash
+# サービスのエラーログ確認
+sudo journalctl -u server-metrics-to-influx.service -f
+
+# タイマーのエラーログ確認
+sudo journalctl -u server-metrics-to-influx.timer -f
+
+# サービスファイルの確認
+sudo systemctl cat server-metrics-to-influx.service
+sudo systemctl cat server-metrics-to-influx.timer
+```
+
+#### 依存パッケージのエラー
+
+```bash
+# 必要なパッケージを再インストール
+source venv/bin/activate
+pip install psutil requests python-dotenv
+```
+
 ## カスタマイズ
 
 `people_counter.py`内の以下のパラメータを調整できます:
